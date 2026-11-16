@@ -10,7 +10,7 @@ on:
       - ".github/workflows/naviradio.yaml"
 
 env:
-  IMAGE_NAME: naviradio
+  IMAGE_NAME: haos-naviradio
   ARCHITECTURES: '["amd64", "aarch64"]'
   REGISTRY_PREFIX: ghcr.io/brunonayrb
 

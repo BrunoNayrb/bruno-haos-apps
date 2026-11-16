@@ -8,7 +8,7 @@ arch:
   - aarch64
 startup: application
 boot: auto
-image: "ghcr.io/brunonayrb/naviradio"
+image: "ghcr.io/brunonayrb/haos-naviradio"
 ingress: true
 ingress_port: 8099
 ingress_stream: true
