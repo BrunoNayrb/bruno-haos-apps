@@ -985,7 +985,7 @@ async fn main() {
     let public_port: u16 = env::var("PUBLIC_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
-        .unwrap_or(8096);
+        .unwrap_or(8093);
 
     let db_path = format!("{}/naviradio.db", data_dir);
     let db = Arc::new(Mutex::new(init_db(&db_path)));

@@ -3,7 +3,7 @@
 export DATA_DIR="/data"
 export STATIC_DIR="/app/static"
 export INGRESS_PORT="8099"
-export PUBLIC_PORT="8096"
+export PUBLIC_PORT="8093"
 
 export DEFAULT_ND_URL=$(bashio::config 'navidrome_url')
 export DEFAULT_ND_USER=$(bashio::config 'navidrome_admin_user')

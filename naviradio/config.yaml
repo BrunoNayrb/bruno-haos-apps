@@ -1,6 +1,6 @@
 name: "NaviRadio"
 description: "Standalone auto-generated endless radio stations powered by Navidrome"
-version: "0.2.0"
+version: "0.2.1"
 slug: "naviradio"
 init: false
 arch:
@@ -15,9 +15,9 @@ ingress_stream: true
 panel_icon: "mdi:radio"
 panel_title: "NaviRadio"
 ports:
-  8096/tcp: 8096
+  8093/tcp: 8093
 ports_description:
-  8096/tcp: "Standalone Listener Web UI (for Nginx Proxy Manager / radio.lonecraft.net)"
+  8093/tcp: "Standalone Listener Web UI (for Nginx Proxy Manager / radio.lonecraft.net)"
 options:
   navidrome_url: "https://music.lonecraft.net"
   navidrome_admin_user: "badonegamer"
