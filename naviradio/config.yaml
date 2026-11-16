@@ -1,0 +1,34 @@
+name: "NaviRadio"
+description: "Standalone auto-generated endless radio stations powered by Navidrome"
+version: "0.2.0"
+slug: "naviradio"
+init: false
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+image: "ghcr.io/brunonayrb/naviradio"
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: "mdi:radio"
+panel_title: "NaviRadio"
+ports:
+  8096/tcp: 8096
+ports_description:
+  8096/tcp: "Standalone Listener Web UI (for Nginx Proxy Manager / radio.lonecraft.net)"
+options:
+  navidrome_url: "https://music.lonecraft.net"
+  navidrome_admin_user: "badonegamer"
+  navidrome_admin_pass: ""
+  fringe_percentage: 25
+  artist_cooldown: 6
+  min_station_tracks: 15
+schema:
+  navidrome_url: str
+  navidrome_admin_user: str
+  navidrome_admin_pass: password
+  fringe_percentage: "int(0,75)"
+  artist_cooldown: "int(1,25)"
+  min_station_tracks: "int(5,100)"

@@ -1,0 +1,535 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NaviRadio</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b22;
+      --card: #1f242d;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --border: #2e3440;
+      --fringe: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding-bottom: 110px;
+    }
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand { font-size: 1.25rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
+    .nav-tabs { display: flex; gap: 10px; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-hover); }
+    button.secondary { background: var(--card); border: 1px solid var(--border); color: var(--text); }
+    .container { max-width: 1100px; margin: 24px auto; padding: 0 20px; }
+    .login-box {
+      max-width: 380px;
+      margin: 80px auto;
+      background: var(--panel);
+      padding: 28px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+    .field input {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+    }
+    .section-title { font-size: 1.1rem; font-weight: 600; margin: 24px 0 12px; color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .station-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    .station-card:hover, .station-card.active {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .station-cover {
+      width: 64px;
+      height: 64px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: var(--card);
+      flex-shrink: 0;
+    }
+    .station-info h3 { font-size: 0.98rem; margin-bottom: 4px; }
+    .station-info p { font-size: 0.8rem; color: var(--muted); line-height: 1.3; }
+    .admin-panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 28px;
+    }
+    .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 720px) { .admin-grid { grid-template-columns: 1fr; } }
+    .player-bar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #13161c;
+      border-top: 1px solid var(--border);
+      padding: 12px 24px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      z-index: 50;
+    }
+    .now-playing { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .now-playing img { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; }
+    .track-meta { overflow: hidden; }
+    .track-meta h4 { font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-meta span { font-size: 0.82rem; color: var(--muted); }
+    .fringe-pill {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--fringe);
+      margin-left: 6px;
+    }
+    .controls { display: flex; align-items: center; gap: 10px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span>📻 NaviRadio</span>
+      <span id="modeBadge" class="badge hidden">HAOS Admin</span>
+    </div>
+    <div class="nav-tabs">
+      <button id="toggleAdminBtn" class="secondary hidden" onclick="toggleAdminView()">Admin Settings</button>
+      <button id="logoutBtn" class="secondary hidden" onclick="logout()">Log Out</button>
+    </div>
+  </header>
+
+  <div id="loginView" class="login-box hidden">
+    <h2 style="margin-bottom: 6px;">Sign In</h2>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-bottom: 20px;">
+      Use your Navidrome login or a NaviRadio listener account.
+    </p>
+    <div class="field">
+      <label>Username</label>
+      <input type="text" id="loginUser" autocomplete="username" />
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="loginPass" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()" />
+    </div>
+    <p id="loginErr" style="color: #ef4444; font-size: 0.85rem; margin-bottom: 12px;"></p>
+    <button style="width: 100%;" onclick="doLogin()">Tune In</button>
+  </div>
+
+  <div class="container">
+    <div id="adminView" class="admin-panel hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px;">
+        <h2>HAOS Radio Administration</h2>
+        <button onclick="triggerRescan()" id="rescanBtn">Rescan Navidrome & Rebuild Stations</button>
+      </div>
+      <p id="scanStatus" style="color: #60a5fa; font-size: 0.88rem; margin-bottom: 16px;"></p>
+
+      <div class="admin-grid">
+        <div>
+          <div class="field">
+            <label>Navidrome Server URL</label>
+            <input type="text" id="cfgUrl" placeholder="https://music.lonecraft.net" />
+          </div>
+          <div class="field">
+            <label>Navidrome Service Username</label>
+            <input type="text" id="cfgUser" />
+          </div>
+          <div class="field">
+            <label>Navidrome Service Password</label>
+            <input type="password" id="cfgPass" placeholder="Leave blank to keep existing" />
+          </div>
+          <div class="field">
+            <label>
+              <input type="checkbox" id="cfgAllowNdAuth" style="width:auto; margin-right:6px;" />
+              Allow users to log in with their Navidrome account
+            </label>
+          </div>
+        </div>
+
+        <div>
+          <div class="field">
+            <label>Fringe Artist Bleed % (0 = Strict Genre, 25–40 = Include Crossover)</label>
+            <input type="number" id="cfgFringe" min="0" max="75" />
+          </div>
+          <div class="field">
+            <label>Artist Repeat Cooldown (Tracks between same artist)</label>
+            <input type="number" id="cfgCooldown" min="1" max="25" />
+          </div>
+          <div class="field">
+            <label>Minimum Tracks to Auto-Create a Station</label>
+            <input type="number" id="cfgMinTracks" min="5" max="100" />
+          </div>
+          <div class="field">
+            <label>Navidrome Libraries / Folders</label>
+            <div id="folderCheckboxes" style="font-size:0.85rem; color:var(--muted);"></div>
+          </div>
+        </div>
+      </div>
+      <button onclick="saveAdminConfig()">Save Settings</button>
+
+      <hr style="border-color: var(--border); margin: 24px 0;" />
+      <h3 style="margin-bottom: 12px;">Fallback Local Listener Accounts</h3>
+      <div style="display:flex; gap:10px; max-width:500px; margin-bottom:14px;">
+        <input type="text" id="newLocalUser" placeholder="Username" style="padding:8px; background:var(--card); border:1px solid var(--border); color:#fff; border-radius:6px;" />
+        <input type="password" id="newLocalPass" placeholder="Password" style="padding:8px; background:var(--card); border:1px solid var(--border); color:#fff; border-radius:6px;" />
+        <button onclick="addLocalUser()">Add User</button>
+      </div>
+      <div id="localUserList" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+    </div>
+
+    <div id="stationsView" class="hidden">
+      <div id="stationsContainer"></div>
+    </div>
+  </div>
+
+  <div id="playerBar" class="player-bar">
+    <div class="now-playing">
+      <img id="npCover" src="" alt="Cover" />
+      <div class="track-meta">
+        <h4><span id="npTitle">Select a station</span> <span id="npFringe" class="fringe-pill hidden">Fringe Match</span></h4>
+        <span id="npArtist"></span>
+      </div>
+    </div>
+    <div class="controls">
+      <button class="secondary" onclick="togglePlay()" id="playPauseBtn">Pause</button>
+      <button onclick="playNext()">Skip ⏭</button>
+    </div>
+    <audio id="audioEl" preload="auto"></audio>
+  </div>
+
+  <script>
+    let authToken = localStorage.getItem('naviradio_token') || '';
+    let isAdmin = false;
+    let activeStationId = null;
+    let queue = [];
+    let recentArtists = [];
+    let recentTracks = [];
+    const audio = document.getElementById('audioEl');
+
+    audio.addEventListener('ended', () => playNext());
+    audio.addEventListener('error', () => setTimeout(playNext, 1000));
+
+    function apiHeaders() {
+      const h = { 'Content-Type': 'application/json' };
+      if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+      return h;
+    }
+
+    async function init() {
+      const res = await fetch('api/context', { headers: apiHeaders() });
+      const ctx = await res.json();
+      isAdmin = ctx.is_admin;
+
+      if (isAdmin) {
+        document.getElementById('modeBadge').classList.remove('hidden');
+        document.getElementById('toggleAdminBtn').classList.remove('hidden');
+        await loadAdminConfig();
+        await loadStations();
+        if (ctx.station_count === 0) {
+          document.getElementById('adminView').classList.remove('hidden');
+        }
+      } else if (ctx.authenticated) {
+        document.getElementById('logoutBtn').classList.remove('hidden');
+        await loadStations();
+      } else {
+        document.getElementById('loginView').classList.remove('hidden');
+      }
+    }
+
+    async function doLogin() {
+      const username = document.getElementById('loginUser').value;
+      const password = document.getElementById('loginPass').value;
+      const res = await fetch('api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        authToken = data.token;
+        localStorage.setItem('naviradio_token', authToken);
+        document.getElementById('loginView').classList.add('hidden');
+        document.getElementById('logoutBtn').classList.remove('hidden');
+        await loadStations();
+      } else {
+        document.getElementById('loginErr').textContent = 'Invalid login credentials.';
+      }
+    }
+
+    function logout() {
+      localStorage.removeItem('naviradio_token');
+      authToken = '';
+      audio.pause();
+      location.reload();
+    }
+
+    function toggleAdminView() {
+      document.getElementById('adminView').classList.toggle('hidden');
+    }
+
+    async function loadStations() {
+      const res = await fetch('api/stations', { headers: apiHeaders() });
+      if (!res.ok) return;
+      const stations = await res.json();
+      document.getElementById('stationsView').classList.remove('hidden');
+      const container = document.getElementById('stationsContainer');
+      container.innerHTML = '';
+
+      if (stations.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted);">No stations built yet. Open HAOS Admin Settings to scan your Navidrome library.</p>';
+        return;
+      }
+
+      const groups = {};
+      stations.forEach(s => {
+        if (!groups[s.category]) groups[s.category] = [];
+        groups[s.category].push(s);
+      });
+
+      Object.keys(groups).forEach(cat => {
+        const title = document.createElement('div');
+        title.className = 'section-title';
+        title.textContent = cat;
+        container.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+        groups[cat].forEach(st => {
+          const card = document.createElement('div');
+          card.className = 'station-card' + (st.id === activeStationId ? ' active' : '');
+          card.id = 'st-' + st.id;
+          card.innerHTML = `
+            <img class="station-cover" src="api/cover/${encodeURIComponent(st.cover_id)}" onerror="this.style.opacity=0.2" />
+            <div class="station-info" onclick="startStation('${st.id}')" style="flex-grow:1; cursor:pointer;">
+              <h3>${st.name}</h3>
+              <p>${st.description}</p>
+              <p style="margin-top:4px; color:#60a5fa;">${st.core_count} core + ${st.fringe_count} fringe tracks</p>
+            </div>
+            <button onclick="toggleFavorite('${st.id}', ${!st.is_favorite}, event)" style="background:transparent; border:none; cursor:pointer; font-size:1.3rem; padding:8px;">
+              ${st.is_favorite ? '❤️' : '🤍'}
+            </button>
+          `;
+          grid.appendChild(card);
+        });
+        container.appendChild(grid);
+      });
+    }
+
+    async function toggleFavorite(stationId, makeFav, event) {
+      event.stopPropagation();
+      await fetch(`api/stations/${encodeURIComponent(stationId)}/favorite`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ favorite: makeFav })
+      });
+      await loadStations();
+    }
+
+    async function startStation(stationId) {
+      activeStationId = stationId;
+      document.querySelectorAll('.station-card').forEach(el => el.classList.remove('active'));
+      const card = document.getElementById('st-' + stationId);
+      if (card) card.classList.add('active');
+
+      queue = [];
+      recentArtists = [];
+      recentTracks = [];
+      await refillQueue();
+      playNext();
+    }
+
+    async function refillQueue() {
+      if (!activeStationId) return;
+      const params = new URLSearchParams({
+        count: '20',
+        exclude_artists: recentArtists.slice(-8).join(','),
+        exclude_tracks: recentTracks.slice(-40).join(',')
+      });
+      const res = await fetch(`api/stations/${encodeURIComponent(activeStationId)}/queue?${params}`, {
+        headers: apiHeaders()
+      });
+      if (res.ok) {
+        const tracks = await res.json();
+        queue.push(...tracks);
+      }
+    }
+
+    async function playNext() {
+      if (queue.length < 5) {
+        await refillQueue();
+      }
+      const next = queue.shift();
+      if (!next) return;
+
+      recentArtists.push(next.artist);
+      recentTracks.push(next.id);
+
+      document.getElementById('playerBar').style.display = 'flex';
+      document.getElementById('npTitle').textContent = next.title;
+      document.getElementById('npArtist').textContent = `${next.artist} — ${next.album}`;
+      document.getElementById('npCover').src = `api/cover/${encodeURIComponent(next.id)}`;
+      document.getElementById('npFringe').classList.toggle('hidden', !next.is_fringe);
+
+      audio.src = `api/stream/${encodeURIComponent(next.id)}`;
+      audio.play();
+      document.getElementById('playPauseBtn').textContent = 'Pause';
+    }
+
+    function togglePlay() {
+      if (audio.paused) {
+        audio.play();
+        document.getElementById('playPauseBtn').textContent = 'Pause';
+      } else {
+        audio.pause();
+        document.getElementById('playPauseBtn').textContent = 'Play';
+      }
+    }
+
+    async function loadAdminConfig() {
+      const res = await fetch('api/admin/config');
+      if (!res.ok) return;
+      const data = await res.json();
+      const c = data.config;
+      document.getElementById('cfgUrl').value = c.navidrome_url;
+      document.getElementById('cfgUser').value = c.navidrome_user;
+      document.getElementById('cfgAllowNdAuth').checked = c.allow_navidrome_auth;
+      document.getElementById('cfgFringe').value = c.fringe_percentage;
+      document.getElementById('cfgCooldown').value = c.artist_cooldown;
+      document.getElementById('cfgMinTracks').value = c.min_station_tracks;
+
+      const fDiv = document.getElementById('folderCheckboxes');
+      if (data.available_folders.length === 0) {
+        fDiv.textContent = 'All libraries included (save credentials to list specific folders).';
+      } else {
+        fDiv.innerHTML = data.available_folders.map(f => `
+          <label style="display:block; margin-bottom:4px;">
+            <input type="checkbox" class="folder-cb" value="${f.id}" ${c.selected_folders.includes(f.id) ? 'checked' : ''} />
+            ${f.name} (ID: ${f.id})
+          </label>
+        `).join('');
+      }
+
+      const uDiv = document.getElementById('localUserList');
+      uDiv.innerHTML = data.local_users.map(u => `
+        <span class="badge" style="display:flex; align-items:center; gap:6px;">
+          ${u}
+          <a href="#" onclick="deleteLocalUser('${u}'); return false;" style="color:#ef4444; text-decoration:none;">✕</a>
+        </span>
+      `).join('');
+    }
+
+    async function saveAdminConfig() {
+      const selected_folders = Array.from(document.querySelectorAll('.folder-cb:checked')).map(cb => cb.value);
+      const payload = {
+        navidrome_url: document.getElementById('cfgUrl').value,
+        navidrome_user: document.getElementById('cfgUser').value,
+        navidrome_pass: document.getElementById('cfgPass').value,
+        allow_navidrome_auth: document.getElementById('cfgAllowNdAuth').checked,
+        selected_folders,
+        fringe_percentage: parseInt(document.getElementById('cfgFringe').value || '25', 10),
+        artist_cooldown: parseInt(document.getElementById('cfgCooldown').value || '6', 10),
+        min_station_tracks: parseInt(document.getElementById('cfgMinTracks').value || '15', 10)
+      };
+      await fetch('api/admin/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      document.getElementById('scanStatus').textContent = 'Settings saved.';
+      await loadAdminConfig();
+    }
+
+    async function triggerRescan() {
+      await saveAdminConfig();
+      const btn = document.getElementById('rescanBtn');
+      btn.disabled = true;
+      document.getElementById('scanStatus').textContent = 'Scanning Navidrome library and building stations...';
+      const res = await fetch('api/admin/rescan', { method: 'POST' });
+      const data = await res.json();
+      btn.disabled = false;
+      if (res.ok) {
+        document.getElementById('scanStatus').textContent =
+          `Indexed ${data.tracks_indexed} tracks and built ${data.stations_created} dynamic stations.`;
+        await loadStations();
+      } else {
+        document.getElementById('scanStatus').textContent = 'Error: ' + (data.message || 'Scan failed');
+      }
+    }
+
+    async function addLocalUser() {
+      const username = document.getElementById('newLocalUser').value;
+      const password = document.getElementById('newLocalPass').value;
+      if (!username || !password) return;
+      await fetch('api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      document.getElementById('newLocalUser').value = '';
+      document.getElementById('newLocalPass').value = '';
+      await loadAdminConfig();
+    }
+
+    async function deleteLocalUser(u) {
+      await fetch(`api/admin/users/${encodeURIComponent(u)}`, { method: 'DELETE' });
+      await loadAdminConfig();
+    }
+
+    init();
+  </script>
+</body>
+</html>
