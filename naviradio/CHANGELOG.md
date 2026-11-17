@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.11
+
+- The Navidrome password is no longer sent to the browser or written to the add-on log.
+- Wrong listener passwords are limited by network address, not by account. Five misses pauses that address for about a minute, then five minutes, then fifteen. A correct password still signs in, and the account is never locked.
+
 ## 0.2.10
 
 - The play triangle fills the round button instead of sitting small inside it.

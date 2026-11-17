@@ -531,7 +531,9 @@
         document.getElementById('appShell').classList.add('visible');
         await loadStations();
       } else {
-        document.getElementById('loginErr').textContent = 'Invalid login credentials.';
+        document.getElementById('loginErr').textContent = '';
+        const text = await res.text();
+        document.getElementById('loginErr').textContent = text || 'Invalid login credentials.';
       }
     }
 

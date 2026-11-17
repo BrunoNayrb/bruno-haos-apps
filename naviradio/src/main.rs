@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
@@ -15,8 +15,9 @@ use sha2::Sha256;
 use std::{
     collections::{HashMap, HashSet},
     env,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 #[derive(Clone)]
@@ -25,6 +26,12 @@ struct AppState {
     http: reqwest::Client,
     is_admin_port: bool,
     static_dir: String,
+    logins: Arc<Mutex<HashMap<String, LoginStrike>>>,
+}
+
+struct LoginStrike {
+    fails: u32,
+    open_at: Instant,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -256,6 +263,84 @@ fn save_setting(conn: &Connection, key: &str, value: &str) {
     );
 }
 
+fn is_private_peer(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+fn client_ip(headers: &HeaderMap, peer: SocketAddr) -> String {
+    if is_private_peer(peer.ip()) {
+        if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            let ip = real.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+        if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            if let Some(first) = forwarded.split(',').next() {
+                let ip = first.trim();
+                if !ip.is_empty() {
+                    return ip.to_string();
+                }
+            }
+        }
+    }
+    peer.ip().to_string()
+}
+
+fn pause_after(fails: u32) -> Duration {
+    let secs = match fails {
+        0..=4 => 0,
+        5..=7 => 60,
+        8..=11 => 300,
+        _ => 900,
+    };
+    Duration::from_secs(secs)
+}
+
+fn login_pause_secs(guard: &HashMap<String, LoginStrike>, ip: &str) -> Option<u64> {
+    let strike = guard.get(ip)?;
+    let now = Instant::now();
+    if strike.open_at > now {
+        Some((strike.open_at - now).as_secs().max(1))
+    } else {
+        None
+    }
+}
+
+fn note_login_failure(guard: &mut HashMap<String, LoginStrike>, ip: &str) {
+    if guard.len() > 256 {
+        let now = Instant::now();
+        guard.retain(|_, strike| strike.open_at > now);
+    }
+    let strike = guard.entry(ip.to_string()).or_insert(LoginStrike {
+        fails: 0,
+        open_at: Instant::now(),
+    });
+    if strike.open_at + Duration::from_secs(1800) < Instant::now() {
+        strike.fails = 0;
+    }
+    strike.fails = strike.fails.saturating_add(1);
+    strike.open_at = Instant::now() + pause_after(strike.fails);
+}
+
+fn pause_message(seconds: u64) -> String {
+    let wait = if seconds < 90 {
+        "about a minute".to_string()
+    } else {
+        format!("about {} minutes", (seconds + 59) / 60)
+    };
+    format!(
+        "Too many wrong passwords from this address. Try again in {wait}. The account is not locked."
+    )
+}
+
 fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
     if state.is_admin_port {
         return true;
@@ -305,8 +390,19 @@ async fn api_context(State(state): State<AppState>, headers: HeaderMap) -> impl 
 
 async fn api_login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<LoginReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let ip = client_ip(&headers, peer);
+    {
+        let guard = state.logins.lock().unwrap();
+        if let Some(seconds) = login_pause_secs(&guard, &ip) {
+            log_ha(&format!("login paused ip={ip} seconds={seconds}"));
+            return Err((StatusCode::TOO_MANY_REQUESTS, pause_message(seconds)));
+        }
+    }
+
     let cfg = {
         let conn = state.db.lock().unwrap();
         let pw_hash = hash_pw(&req.password);
@@ -324,12 +420,17 @@ async fn api_login(
                 "INSERT INTO sessions (token, username) VALUES (?1, ?2)",
                 params![token, req.username.trim()],
             );
-            return Ok(Json(serde_json::json!({ "token": token, "username": req.username })));
+            drop(conn);
+            state.logins.lock().unwrap().remove(&ip);
+            return Ok(Json(
+                serde_json::json!({ "token": token, "username": req.username }),
+            ));
         }
         load_config(&conn)
     };
 
     if !cfg.allow_navidrome_auth {
+        note_login_failure(&mut state.logins.lock().unwrap(), &ip);
         return Err((StatusCode::UNAUTHORIZED, "Invalid credentials".into()));
     }
 
@@ -349,6 +450,7 @@ async fn api_login(
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid Subsonic response".into()))?;
 
     if body["subsonic-response"]["status"].as_str() == Some("ok") {
+        state.logins.lock().unwrap().remove(&ip);
         let token = uuid::Uuid::new_v4().to_string();
         let conn = state.db.lock().unwrap();
         let _ = conn.execute(
@@ -357,7 +459,9 @@ async fn api_login(
         );
         Ok(Json(serde_json::json!({ "token": token, "username": req.username })))
     } else {
-        Err((StatusCode::UNAUTHORIZED, "Navidrome login failed".into()))
+        note_login_failure(&mut state.logins.lock().unwrap(), &ip);
+        log_ha(&format!("login failed ip={ip}"));
+        Err((StatusCode::UNAUTHORIZED, "Invalid credentials".into()))
     }
 }
 
@@ -697,7 +801,16 @@ async fn admin_get_config(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     Json(serde_json::json!({
-        "config": cfg,
+        "config": {
+            "navidrome_url": cfg.navidrome_url,
+            "navidrome_user": cfg.navidrome_user,
+            "allow_navidrome_auth": cfg.allow_navidrome_auth,
+            "selected_folders": cfg.selected_folders,
+            "fringe_percentage": cfg.fringe_percentage,
+            "artist_cooldown": cfg.artist_cooldown,
+            "min_station_tracks": cfg.min_station_tracks,
+            "password_saved": !cfg.navidrome_pass.is_empty()
+        },
         "available_folders": folders,
         "local_users": users
     }))
@@ -803,41 +916,6 @@ fn log_ha(message: &str) {
     eprintln!("naviradio: {message}");
 }
 
-fn password_debug(pass: &str) -> String {
-    let mut letters = 0usize;
-    let mut digits = 0usize;
-    let mut symbols = 0usize;
-    let mut whitespace = 0usize;
-    let mut non_ascii = 0usize;
-    for c in pass.chars() {
-        if c.is_ascii_alphabetic() {
-            letters += 1;
-        } else if c.is_ascii_digit() {
-            digits += 1;
-        } else if c.is_whitespace() {
-            whitespace += 1;
-        } else if c.is_ascii() {
-            symbols += 1;
-        } else {
-            non_ascii += 1;
-        }
-    }
-    let mut hasher = Sha256::new();
-    hasher.update(pass.as_bytes());
-    let digest = hex::encode(hasher.finalize());
-    format!(
-        "chars={} bytes={} letters={} digits={} symbols={} whitespace={} non_ascii={} sha256_12={}",
-        pass.chars().count(),
-        pass.len(),
-        letters,
-        digits,
-        symbols,
-        whitespace,
-        non_ascii,
-        &digest[..12]
-    )
-}
-
 fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> String {
     headers
         .get(name)
@@ -855,10 +933,7 @@ async fn navidrome_login(
 ) -> Result<NdAuth, String> {
     let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
     let source = if typed_password { "typed" } else { "saved" };
-    log_ha(&format!(
-        "login start user={user:?} url={url} source={source} {}",
-        password_debug(pass)
-    ));
+    log_ha(&format!("login start user={user:?} url={url} source={source}"));
     let resp = state
         .http
         .post(&url)
@@ -875,12 +950,8 @@ async fn navidrome_login(
     let remaining = header_str(&headers, "x-ratelimit-remaining");
     let reset = header_str(&headers, "x-ratelimit-reset");
     let body_text = resp.text().await.unwrap_or_default();
-    let mut snippet: String = body_text.chars().take(300).collect();
-    if !pass.is_empty() {
-        snippet = snippet.replace(pass, "***");
-    }
     log_ha(&format!(
-        "login response http={} ratelimit={limit} remaining={remaining} reset={reset} body={snippet}",
+        "login response http={} ratelimit={limit} remaining={remaining} reset={reset}",
         status.as_u16()
     ));
     if status.is_success() {
@@ -917,7 +988,7 @@ async fn navidrome_login(
             "the saved password. The box starts empty, so type the current website password into Navidrome Service Password"
         };
         return Err(format!(
-            "Navidrome refused {source} for username \"{user}\". Open the NaviRadio add-on log for the HTTP status and password shape. The password itself is not written there."
+            "Navidrome refused {source} for username \"{user}\"."
         ));
     }
     Err(format!(
@@ -1340,6 +1411,7 @@ async fn main() {
 
     let db_path = format!("{}/naviradio.db", data_dir);
     let db = Arc::new(Mutex::new(init_db(&db_path)));
+    let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
         .build()
@@ -1350,6 +1422,7 @@ async fn main() {
         http: http.clone(),
         is_admin_port: true,
         static_dir: static_dir.clone(),
+        logins: logins.clone(),
     };
 
     let public_state = AppState {
@@ -1357,6 +1430,7 @@ async fn main() {
         http: http.clone(),
         is_admin_port: false,
         static_dir,
+        logins,
     };
 
     let startup_state = admin_state.clone();
@@ -1373,11 +1447,17 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.10 listening admin={ingress_port} public={public_port}"
+        "version 0.2.11 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
-        _ = axum::serve(admin_listener, admin_app) => {},
-        _ = axum::serve(public_listener, public_app) => {},
+        _ = axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        ) => {},
+        _ = axum::serve(
+            public_listener,
+            public_app.into_make_service_with_connect_info::<SocketAddr>(),
+        ) => {},
     }
 }
