@@ -745,6 +745,53 @@ fn nd_params(auth: &NdAuth) -> Vec<(String, String)> {
     ]
 }
 
+fn log_ha(message: &str) {
+    eprintln!("naviradio: {message}");
+}
+
+fn password_debug(pass: &str) -> String {
+    let mut letters = 0usize;
+    let mut digits = 0usize;
+    let mut symbols = 0usize;
+    let mut whitespace = 0usize;
+    let mut non_ascii = 0usize;
+    for c in pass.chars() {
+        if c.is_ascii_alphabetic() {
+            letters += 1;
+        } else if c.is_ascii_digit() {
+            digits += 1;
+        } else if c.is_whitespace() {
+            whitespace += 1;
+        } else if c.is_ascii() {
+            symbols += 1;
+        } else {
+            non_ascii += 1;
+        }
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(pass.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    format!(
+        "chars={} bytes={} letters={} digits={} symbols={} whitespace={} non_ascii={} sha256_12={}",
+        pass.chars().count(),
+        pass.len(),
+        letters,
+        digits,
+        symbols,
+        whitespace,
+        non_ascii,
+        &digest[..12]
+    )
+}
+
+fn header_str(headers: &reqwest::header::HeaderMap, name: &str) -> String {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string()
+}
+
 async fn navidrome_login(
     state: &AppState,
     base_url: &str,
@@ -753,14 +800,62 @@ async fn navidrome_login(
     typed_password: bool,
 ) -> Result<NdAuth, String> {
     let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
+    let source = if typed_password { "typed" } else { "saved" };
+    log_ha(&format!(
+        "login start user={user:?} url={url} source={source} {}",
+        password_debug(pass)
+    ));
     let resp = state
         .http
         .post(&url)
         .json(&serde_json::json!({ "username": user, "password": pass }))
         .send()
         .await
-        .map_err(|e| format!("Failed connecting to Navidrome: {}", e))?;
+        .map_err(|e| {
+            log_ha(&format!("login connection failed url={url} error={e}"));
+            format!("Failed connecting to Navidrome: {}", e)
+        })?;
     let status = resp.status();
+    let headers = resp.headers().clone();
+    let limit = header_str(&headers, "x-ratelimit-limit");
+    let remaining = header_str(&headers, "x-ratelimit-remaining");
+    let reset = header_str(&headers, "x-ratelimit-reset");
+    let body_text = resp.text().await.unwrap_or_default();
+    let mut snippet: String = body_text.chars().take(300).collect();
+    if !pass.is_empty() {
+        snippet = snippet.replace(pass, "***");
+    }
+    log_ha(&format!(
+        "login response http={} ratelimit={limit} remaining={remaining} reset={reset} body={snippet}",
+        status.as_u16()
+    ));
+    if status.is_success() {
+        let body: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|_| "Navidrome login did not return JSON.".to_string())?;
+        let token = json_str(&body["subsonicToken"]);
+        let salt = json_str(&body["subsonicSalt"]);
+        if token.is_empty() || salt.is_empty() {
+            log_ha("login succeeded but subsonicToken or subsonicSalt was missing");
+            return Err("Navidrome accepted the login but did not return a Subsonic token.".into());
+        }
+        let name = json_str(&body["username"]);
+        log_ha(&format!("login ok user={name:?}"));
+        return Ok(NdAuth {
+            user: if name.is_empty() {
+                user.to_string()
+            } else {
+                name
+            },
+            token,
+            salt,
+        });
+    }
+    if status.as_u16() == 429 || remaining == "0" {
+        return Err(
+            "Navidrome temporarily blocked logins from this server after too many tries. Wait a minute, then rescan once. Details are in the NaviRadio add-on log."
+                .into(),
+        );
+    }
     if status.as_u16() == 401 || status.as_u16() == 403 {
         let source = if typed_password {
             "the password just typed into Navidrome Service Password"
@@ -768,33 +863,13 @@ async fn navidrome_login(
             "the saved password. The box starts empty, so type the current website password into Navidrome Service Password"
         };
         return Err(format!(
-            "Navidrome refused {source} for username \"{user}\". It has to be the same password as the Navidrome website. If you just tried several times, wait a minute and try once."
+            "Navidrome refused {source} for username \"{user}\". Open the NaviRadio add-on log for the HTTP status and password shape. The password itself is not written there."
         ));
     }
-    if status.as_u16() == 429 {
-        return Err(
-            "Navidrome temporarily blocked logins after too many tries. Wait a minute, then rescan once."
-                .into(),
-        );
-    }
-    if !status.is_success() {
-        return Err(format!("Navidrome login failed with HTTP {}.", status));
-    }
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|_| "Navidrome login did not return JSON.".to_string())?;
-    let token = json_str(&body["subsonicToken"]);
-    let salt = json_str(&body["subsonicSalt"]);
-    if token.is_empty() || salt.is_empty() {
-        return Err("Navidrome accepted the login but did not return a Subsonic token.".into());
-    }
-    let name = json_str(&body["username"]);
-    Ok(NdAuth {
-        user: if name.is_empty() { user.to_string() } else { name },
-        token,
-        salt,
-    })
+    Err(format!(
+        "Navidrome login failed with HTTP {}. See the NaviRadio add-on log.",
+        status
+    ))
 }
 
 async fn subsonic_get(
@@ -1242,6 +1317,9 @@ async fn main() {
 
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
+    log_ha(&format!(
+        "version 0.2.5 listening admin={ingress_port} public={public_port}"
+    ));
 
     tokio::select! {
         _ = axum::serve(admin_listener, admin_app) => {},
