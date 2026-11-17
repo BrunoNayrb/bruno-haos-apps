@@ -1001,7 +1001,6 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 }
             }
         }
-    }
 
     let conn = state.db.lock().unwrap();
     conn.execute("DELETE FROM tracks", []).unwrap();
