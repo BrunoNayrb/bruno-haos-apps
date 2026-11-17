@@ -251,14 +251,24 @@
     .controls {
       display: flex;
       align-items: center;
-      gap: 4px;
+      justify-content: center;
+      gap: 6px;
       background: #1b2029;
       border: 1px solid var(--border);
       border-radius: 999px;
       padding: 6px 8px;
     }
     .player-tools { display: flex; justify-content: flex-end; align-items: center; gap: 2px; }
-    .transport { display: flex; align-items: center; gap: 14px; }
+    .transport { position: relative; display: flex; align-items: center; justify-content: center; }
+    .volume-group {
+      position: absolute;
+      left: calc(100% + 14px);
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
     .volume { display: flex; align-items: center; width: 112px; }
     input.volume-slider {
       -webkit-appearance: none;
@@ -310,7 +320,7 @@
       border-radius: 50%;
       background: #fff;
       color: #111827;
-      margin: 0 4px;
+      margin: 0;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -402,7 +412,14 @@
       cursor: pointer;
     }
     .now-progress span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; }
-    .now-transport { display: flex; align-items: center; gap: 16px; }
+    .now-transport { display: flex; align-items: center; justify-content: center; gap: 16px; width: 100%; }
+    .now-volume-group {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .now-volume { width: min(220px, 56vw); }
     button.now-icon {
       width: 58px;
       height: 58px;
@@ -433,7 +450,6 @@
     button.now-play:hover { background: #fff; }
     button.now-play svg { width: 32px; height: 32px; display: block; }
     button.now-play svg.play-glyph { width: 30px; height: 34px; margin-left: 4px; }
-    .now-volume { width: min(240px, 70vw); }
     .art-flyer {
       position: fixed;
       z-index: 80;
@@ -564,11 +580,13 @@
         <button class="play-btn" id="playPauseBtn" title="Play"></button>
         <button class="icon-btn" id="nextBtn" title="Next"></button>
         <button class="icon-btn on" id="shuffleBtn" title="Shuffle"></button>
-        <button class="icon-btn" id="muteBtn" title="Mute"></button>
       </div>
-      <label class="volume">
-        <input class="volume-slider" id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
-      </label>
+      <div class="volume-group">
+        <button class="icon-btn" id="muteBtn" title="Mute"></button>
+        <label class="volume">
+          <input class="volume-slider" id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+        </label>
+      </div>
     </div>
     <div class="player-tools">
       <button class="icon-btn" id="favBtn" title="Favorite station"></button>
@@ -592,11 +610,13 @@
         <button class="now-play" id="nowPlay" title="Play"></button>
         <button class="now-icon" id="nowNext" title="Next"></button>
         <button class="now-icon" id="nowShuffle" title="Shuffle"></button>
-        <button class="now-icon" id="nowMute" title="Mute"></button>
       </div>
-      <label class="volume now-volume">
-        <input class="volume-slider" id="nowVolume" type="range" min="0" max="100" value="80" aria-label="Volume" />
-      </label>
+      <div class="now-volume-group">
+        <button class="now-icon" id="nowMute" title="Mute"></button>
+        <label class="volume now-volume">
+          <input class="volume-slider" id="nowVolume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+        </label>
+      </div>
     </div>
   </div>
   <img id="artFlyer" class="art-flyer" alt="" />

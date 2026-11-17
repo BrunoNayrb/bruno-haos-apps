@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.15
+
+- Mute sits with the volume slider, not in the play controls.
+- The play button is centered, with the same number of buttons on each side. The large player centers that row, then the mute button and slider under it.
+
 ## 0.2.14
 
 - Click the album art in the player to open a large player. The art grows into the center and the screen slides up. The controls under it are larger.
