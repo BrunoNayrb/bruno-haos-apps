@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.12
+
+- The public site will not play a song or show cover art until you sign in. A direct link to a track no longer works on its own.
+- Sign-in lasts 30 days and does not interrupt a station that is already playing. Log Out ends it.
+
 ## 0.2.11
 
 - The Navidrome password is no longer sent to the browser or written to the add-on log.

@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
@@ -341,17 +341,60 @@ fn pause_message(seconds: u64) -> String {
     )
 }
 
-fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
-    if state.is_admin_port {
-        return true;
+fn request_is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("https")
+        })
+        .unwrap_or(false)
+}
+
+fn session_cookie(token: &str, secure: bool) -> HeaderValue {
+    let mut raw = format!(
+        "naviradio_session={token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000"
+    );
+    if secure {
+        raw.push_str("; Secure");
     }
-    let Some(auth) = headers.get("Authorization").and_then(|h| h.to_str().ok()) else {
-        return false;
-    };
-    let token = auth.trim_start_matches("Bearer ").trim();
-    if token.is_empty() {
-        return false;
+    HeaderValue::from_str(&raw).expect("session cookie")
+}
+
+fn clear_session_cookie(secure: bool) -> HeaderValue {
+    let mut raw = "naviradio_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0".to_string();
+    if secure {
+        raw.push_str("; Secure");
     }
+    HeaderValue::from_str(&raw).expect("clear cookie")
+}
+
+fn presented_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(auth) = headers.get("authorization").and_then(|h| h.to_str().ok()) {
+        if let Some(token) = auth.strip_prefix("Bearer ") {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    let cookie = headers.get("cookie").and_then(|h| h.to_str().ok())?;
+    for part in cookie.split(';') {
+        if let Some(val) = part.trim().strip_prefix("naviradio_session=") {
+            let val = val.trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn session_is_valid(state: &AppState, token: &str) -> bool {
     let conn = state.db.lock().unwrap();
     conn.query_row(
         "SELECT COUNT(*) FROM sessions WHERE token = ?1",
@@ -362,6 +405,38 @@ fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
         > 0
 }
 
+fn known_media_id(state: &AppState, id: &str) -> bool {
+    let conn = state.db.lock().unwrap();
+    let in_tracks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tracks WHERE id = ?1 OR cover_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if in_tracks > 0 {
+        return true;
+    }
+    let in_stations: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM stations WHERE cover_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    in_stations > 0
+}
+
+fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
+    if state.is_admin_port {
+        return true;
+    }
+    match presented_token(headers) {
+        Some(token) => session_is_valid(state, &token),
+        None => false,
+    }
+}
+
 async fn index_html(State(state): State<AppState>) -> impl IntoResponse {
     let path = format!("{}/index.html", state.static_dir);
     match tokio::fs::read_to_string(&path).await {
@@ -370,8 +445,16 @@ async fn index_html(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-async fn api_context(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    let authed = is_authenticated(&state, &headers);
+async fn api_context(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let token = presented_token(&headers);
+    let authed = if state.is_admin_port {
+        true
+    } else {
+        token
+            .as_deref()
+            .map(|t| session_is_valid(&state, t))
+            .unwrap_or(false)
+    };
     let conn = state.db.lock().unwrap();
     let track_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0))
@@ -379,13 +462,33 @@ async fn api_context(State(state): State<AppState>, headers: HeaderMap) -> impl 
     let station_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM stations", [], |r| r.get(0))
         .unwrap_or(0);
+    drop(conn);
 
-    Json(serde_json::json!({
+    let mut resp = Json(serde_json::json!({
         "is_admin": state.is_admin_port,
         "authenticated": authed,
         "track_count": track_count,
         "station_count": station_count
     }))
+    .into_response();
+    if authed && !state.is_admin_port {
+        if let Some(token) = token {
+            resp.headers_mut().insert(
+                SET_COOKIE,
+                session_cookie(&token, request_is_https(&headers)),
+            );
+        }
+    }
+    resp
+}
+
+fn finish_login(token: String, username: &str, headers: &HeaderMap) -> Response {
+    let mut resp = Json(serde_json::json!({ "token": token, "username": username })).into_response();
+    resp.headers_mut().insert(
+        SET_COOKIE,
+        session_cookie(&token, request_is_https(headers)),
+    );
+    resp
 }
 
 async fn api_login(
@@ -393,7 +496,7 @@ async fn api_login(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<LoginReq>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let ip = client_ip(&headers, peer);
     {
         let guard = state.logins.lock().unwrap();
@@ -422,9 +525,7 @@ async fn api_login(
             );
             drop(conn);
             state.logins.lock().unwrap().remove(&ip);
-            return Ok(Json(
-                serde_json::json!({ "token": token, "username": req.username }),
-            ));
+            return Ok(finish_login(token, req.username.trim(), &headers));
         }
         load_config(&conn)
     };
@@ -457,7 +558,7 @@ async fn api_login(
             "INSERT INTO sessions (token, username) VALUES (?1, ?2)",
             params![token, req.username.trim()],
         );
-        Ok(Json(serde_json::json!({ "token": token, "username": req.username })))
+        Ok(finish_login(token, req.username.trim(), &headers))
     } else {
         note_login_failure(&mut state.logins.lock().unwrap(), &ip);
         log_ha(&format!("login failed ip={ip}"));
@@ -705,11 +806,30 @@ async fn api_station_queue(
     Ok(Json(queue))
 }
 
+async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(token) = presented_token(&headers) {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute("DELETE FROM sessions WHERE token = ?1", params![token]);
+    }
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    resp.headers_mut().insert(
+        SET_COOKIE,
+        clear_session_cookie(request_is_https(&headers)),
+    );
+    resp
+}
+
 async fn proxy_stream(
     State(state): State<AppState>,
     Path(track_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
+    if !is_authenticated(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !known_media_id(&state, &track_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let cfg = {
         let conn = state.db.lock().unwrap();
         load_config(&conn)
@@ -747,7 +867,14 @@ async fn proxy_stream(
 async fn proxy_cover(
     State(state): State<AppState>,
     Path(cover_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, StatusCode> {
+    if !is_authenticated(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if !known_media_id(&state, &cover_id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let cfg = {
         let conn = state.db.lock().unwrap();
         load_config(&conn)
@@ -1378,6 +1505,7 @@ fn build_router(state: AppState) -> Router {
         .route("/", get(index_html))
         .route("/api/context", get(api_context))
         .route("/api/login", post(api_login))
+        .route("/api/logout", post(api_logout))
         .route("/api/stations", get(api_stations))
         .route("/api/stations/:id/favorite", post(api_toggle_favorite))
         .route("/api/stations/:id/tracks", get(api_station_tracks))
@@ -1447,7 +1575,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.11 listening admin={ingress_port} public={public_port}"
+        "version 0.2.12 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

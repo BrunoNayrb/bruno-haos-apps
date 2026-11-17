@@ -537,7 +537,8 @@
       }
     }
 
-    function logout() {
+    async function logout() {
+      await fetch('api/logout', { method: 'POST', headers: apiHeaders() });
       localStorage.removeItem('naviradio_token');
       authToken = '';
       audio.pause();
