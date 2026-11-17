@@ -675,6 +675,63 @@ async fn admin_del_user(
     Json(serde_json::json!({ "status": "deleted" }))
 }
 
+fn json_items(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    match value {
+        serde_json::Value::Array(items) => items.clone(),
+        serde_json::Value::Object(_) => vec![value.clone()],
+        _ => Vec::new(),
+    }
+}
+
+fn json_str(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn subsonic_failure(json: &serde_json::Value) -> Option<String> {
+    let resp = &json["subsonic-response"];
+    if resp.is_null() {
+        return Some("Navidrome did not return a Subsonic response.".into());
+    }
+    if resp["status"].as_str() == Some("failed") {
+        let message = resp["error"]["message"]
+            .as_str()
+            .unwrap_or("Navidrome rejected the request");
+        return Some(message.to_string());
+    }
+    None
+}
+
+async fn subsonic_get(
+    state: &AppState,
+    endpoint: &str,
+    params: Vec<(String, String)>,
+) -> Result<serde_json::Value, String> {
+    let cfg = {
+        let conn = state.db.lock().unwrap();
+        load_config(&conn)
+    };
+    let url = format!("{}/rest/{}", cfg.navidrome_url, endpoint);
+    let resp = state
+        .http
+        .get(&url)
+        .query(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Failed connecting to Navidrome: {}", e))?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| "Invalid JSON from Navidrome".to_string())?;
+    if let Some(message) = subsonic_failure(&json) {
+        return Err(message);
+    }
+    Ok(json)
+}
+
 async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), String> {
     let cfg = {
         let conn = state.db.lock().unwrap();
@@ -691,66 +748,77 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
         cfg.selected_folders.iter().cloned().map(Some).collect()
     };
 
+    // search3 with a blank query returns no songs on Navidrome. Walk albums instead.
     for folder_opt in folders_to_scan {
-        let mut offset = 0;
+        let mut offset = 0usize;
         loop {
             let mut params = subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass);
-            params.push(("query".into(), "".into()));
-            params.push(("songCount".into(), "500".into()));
-            params.push(("songOffset".into(), offset.to_string()));
+            params.push(("type".into(), "alphabeticalByName".into()));
+            params.push(("size".into(), "500".into()));
+            params.push(("offset".into(), offset.to_string()));
             if let Some(ref fid) = folder_opt {
                 params.push(("musicFolderId".into(), fid.clone()));
             }
 
-            let url = format!("{}/rest/search3.view", cfg.navidrome_url);
-            let resp = state
-                .http
-                .get(&url)
-                .query(&params)
-                .send()
-                .await
-                .map_err(|e| format!("Failed connecting to Navidrome: {}", e))?;
-            let json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|_| "Invalid JSON from Navidrome".to_string())?;
-
-            let Some(songs) = json["subsonic-response"]["searchResult3"]["song"].as_array() else {
-                break;
-            };
-            if songs.is_empty() {
+            let json = subsonic_get(state, "getAlbumList2.view", params).await?;
+            let albums = json_items(&json["subsonic-response"]["albumList2"]["album"]);
+            if albums.is_empty() {
                 break;
             }
-            for s in songs {
-                let id = s["id"].as_str().unwrap_or_default().to_string();
-                let title = s["title"].as_str().unwrap_or("Unknown").to_string();
-                let artist = s["artist"].as_str().unwrap_or("Unknown").to_string();
-                let artist_id = s["artistId"].as_str().unwrap_or_default().to_string();
-                let album = s["album"].as_str().unwrap_or("Unknown").to_string();
-                let genre = s["genre"].as_str().unwrap_or("Alternative").to_string();
-                let duration = s["duration"].as_u64().unwrap_or(180) as u32;
-                let cover_id = s["coverArt"].as_str().unwrap_or(&id).to_string();
-                
-                let (cluster, _) = normalize_genre_cluster(&genre);
-                if !id.is_empty() {
-                    all_tracks.push((
-                        id,
-                        title,
-                        artist,
-                        artist_id,
-                        album,
-                        genre,
-                        cluster,
-                        duration,
-                        cover_id,
-                    ));
+
+            for album in &albums {
+                let album_id = json_str(&album["id"]);
+                if album_id.is_empty() {
+                    continue;
+                }
+                let mut params = subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass);
+                params.push(("id".into(), album_id));
+                let album_json = subsonic_get(state, "getAlbum.view", params).await?;
+                let songs = json_items(&album_json["subsonic-response"]["album"]["song"]);
+                for s in &songs {
+                    let id = json_str(&s["id"]);
+                    let title = s["title"].as_str().unwrap_or("Unknown").to_string();
+                    let artist = s["artist"].as_str().unwrap_or("Unknown").to_string();
+                    let artist_id = json_str(&s["artistId"]);
+                    let album_name = s["album"].as_str().unwrap_or("Unknown").to_string();
+                    let genre = s["genre"].as_str().unwrap_or("Alternative").to_string();
+                    let duration = s["duration"]
+                        .as_u64()
+                        .or_else(|| s["duration"].as_f64().map(|n| n as u64))
+                        .unwrap_or(180) as u32;
+                    let cover_id = {
+                        let cover = json_str(&s["coverArt"]);
+                        if cover.is_empty() { id.clone() } else { cover }
+                    };
+                    let (cluster, _) = normalize_genre_cluster(&genre);
+                    if !id.is_empty() {
+                        all_tracks.push((
+                            id,
+                            title,
+                            artist,
+                            artist_id,
+                            album_name,
+                            genre,
+                            cluster,
+                            duration,
+                            cover_id,
+                        ));
+                    }
                 }
             }
-            if songs.len() < 500 {
+
+            if albums.len() < 500 {
                 break;
             }
             offset += 500;
         }
+    }
+
+    if all_tracks.is_empty() {
+        return Err(
+            "Navidrome returned no tracks. Check the URL, username, password, and selected libraries."
+                .into(),
+        );
     }
 
     let mut unique_artist_ids: HashMap<String, String> = HashMap::new();
