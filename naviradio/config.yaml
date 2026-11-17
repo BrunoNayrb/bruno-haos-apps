@@ -1,6 +1,6 @@
 name: "NaviRadio"
 description: "Standalone auto-generated endless radio stations powered by Navidrome"
-version: "0.2.5"
+version: "0.2.6"
 slug: "naviradio"
 init: false
 arch:
@@ -20,7 +20,7 @@ ports_description:
   8093/tcp: "Standalone Listener Web UI (for Nginx Proxy Manager / radio.lonecraft.net)"
 options:
   navidrome_url: "https://music.lonecraft.net"
-  navidrome_admin_user: "badonegamer"
+  navidrome_admin_user: "badlonegamer"
   navidrome_admin_pass: ""
   fringe_percentage: 25
   artist_cooldown: 6

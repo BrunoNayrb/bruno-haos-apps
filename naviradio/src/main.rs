@@ -227,7 +227,7 @@ fn load_config(conn: &Connection) -> AppConfig {
     };
 
     let def_url = env::var("DEFAULT_ND_URL").unwrap_or_else(|_| "https://music.lonecraft.net".into());
-    let def_user = env::var("DEFAULT_ND_USER").unwrap_or_else(|_| "badonegamer".into());
+    let def_user = env::var("DEFAULT_ND_USER").unwrap_or_else(|_| "badlonegamer".into());
     let def_pass = env::var("DEFAULT_ND_PASS").unwrap_or_default();
     let def_fringe = env::var("DEFAULT_FRINGE").unwrap_or_else(|_| "25".into());
     let def_cool = env::var("DEFAULT_COOLDOWN").unwrap_or_else(|_| "6".into());
