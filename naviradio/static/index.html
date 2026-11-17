@@ -644,8 +644,8 @@
     </div>
     <div class="transport">
       <div class="controls">
-        <button class="icon-btn" id="prevBtn" title="Previous"></button>
         <button class="icon-btn" id="stopBtn" title="Stop"></button>
+        <button class="icon-btn" id="prevBtn" title="Previous"></button>
         <button class="play-btn" id="playPauseBtn" title="Play"></button>
         <button class="icon-btn" id="nextBtn" title="Next"></button>
         <button class="icon-btn on" id="shuffleBtn" title="Shuffle"></button>
@@ -676,8 +676,8 @@
       </div>
       <div class="now-progress" id="nowProgress"><span id="nowProgressFill"></span></div>
       <div class="now-transport">
-        <button class="now-icon" id="nowPrev" title="Previous"></button>
         <button class="now-icon" id="nowStop" title="Stop"></button>
+        <button class="now-icon" id="nowPrev" title="Previous"></button>
         <button class="now-play" id="nowPlay" title="Play"></button>
         <button class="now-icon" id="nowNext" title="Next"></button>
         <button class="now-icon" id="nowShuffle" title="Shuffle"></button>
@@ -725,6 +725,7 @@
     const svgVolMute = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 9h3.2L12 5.2v13.6L7.2 15H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M16 9.5l5 5M21 9.5l-5 5"/></svg>';
     const svgDown = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
     let nowOpen = false;
+    let flyerToken = 0;
     function svgHeart(filled) {
       if (filled) {
         return '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 20s-7-4.35-7-9.1A3.9 3.9 0 0 1 12 8a3.9 3.9 0 0 1 7 2.9C19 15.65 12 20 12 20z"/></svg>';
@@ -1255,8 +1256,16 @@
       return rect;
     }
 
+    function hideFlyer() {
+      const flyer = document.getElementById('artFlyer');
+      flyer.classList.remove('show');
+      flyer.style.transition = 'none';
+      flyer.removeAttribute('src');
+    }
+
     function openNowPlaying() {
       if (!current || nowOpen) return;
+      const token = ++flyerToken;
       const cover = document.getElementById('npCover');
       const from = cover.getBoundingClientRect();
       if (!from.width) return;
@@ -1282,6 +1291,7 @@
       }
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          if (token !== flyerToken || !nowOpen) return;
           flyer.style.transition = artEase;
           placeFlyer(flyer, dest, '12px');
         });
@@ -1289,15 +1299,19 @@
       const done = (event) => {
         if (event.propertyName !== 'width') return;
         flyer.removeEventListener('transitionend', done);
-        if (!nowOpen) return;
+        if (token !== flyerToken || !nowOpen) return;
         art.classList.add('settled');
-        flyer.classList.remove('show');
+        hideFlyer();
       };
       flyer.addEventListener('transitionend', done);
     }
 
-    function closeNowPlaying() {
-      if (!nowOpen) return;
+    function closeNowPlaying(immediate) {
+      if (!nowOpen) {
+        if (immediate) hideFlyer();
+        return;
+      }
+      const token = ++flyerToken;
       const art = document.getElementById('nowArt');
       const flyer = document.getElementById('artFlyer');
       const cover = document.getElementById('npCover');
@@ -1308,26 +1322,32 @@
       const screen = document.getElementById('nowScreen');
       screen.classList.remove('open');
       screen.setAttribute('aria-hidden', 'true');
-      if (!from.width) return;
+      const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (immediate || !smooth || !from.width || !to.width) {
+        hideFlyer();
+        return;
+      }
       flyer.src = art.src || cover.src;
       flyer.style.transition = 'none';
       placeFlyer(flyer, from, '12px');
       flyer.classList.add('show');
-      const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (!smooth || !to.width) {
-        flyer.classList.remove('show');
-        return;
-      }
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          if (token !== flyerToken) return;
           flyer.style.transition = artEase;
           placeFlyer(flyer, to, '8px');
         });
       });
-      flyer.addEventListener('transitionend', (event) => {
+      const done = (event) => {
         if (event.propertyName !== 'width') return;
-        flyer.classList.remove('show');
-      }, { once: true });
+        flyer.removeEventListener('transitionend', done);
+        if (token !== flyerToken) return;
+        hideFlyer();
+      };
+      flyer.addEventListener('transitionend', done);
+      setTimeout(() => {
+        if (token === flyerToken) hideFlyer();
+      }, 700);
     }
 
     async function startStationPlayback(forceShuffle) {
@@ -1425,7 +1445,8 @@
     }
 
     function stopPlayback() {
-      closeNowPlaying();
+      closeNowPlaying(true);
+      hideFlyer();
       audio.pause();
       audio.removeAttribute('src');
       audio.load();

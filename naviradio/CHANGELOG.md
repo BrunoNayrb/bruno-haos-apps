@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.17
+
+- Stop and previous swapped places. Stop is now to the left of previous.
+- Stopping no longer leaves the album art sitting on the page after the player closes.
+
 ## 0.2.16
 
 - The large player uses a blurred copy of the cover as its background.

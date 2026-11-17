@@ -1575,7 +1575,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.16 listening admin={ingress_port} public={public_port}"
+        "version 0.2.17 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
