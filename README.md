@@ -20,7 +20,7 @@ Soulbeet and Soulbeet Bulk can be installed together. Bulk uses host port 9766 s
 
 These add-ons were written with AI assistance (xAI Grok) and checked by hand. They are a personal project.
 
-Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Changes are listed in each add-on's `CHANGELOG.md`. That is the file Home Assistant shows on the add-on page. The repository index is [CHANGELOG.md](CHANGELOG.md).
 
 ## After you switch
 
