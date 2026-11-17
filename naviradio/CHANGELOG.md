@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.13
+
+- The player has a mute button with the other controls, and a volume slider to the right of them.
+- Volume is remembered in the browser.
+
 ## 0.2.12
 
 - The public site will not play a song or show cover art until you sign in. A direct link to a track no longer works on its own.
