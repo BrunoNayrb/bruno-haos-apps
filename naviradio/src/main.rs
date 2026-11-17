@@ -728,6 +728,75 @@ fn subsonic_failure(json: &serde_json::Value) -> Option<String> {
     None
 }
 
+struct NdAuth {
+    user: String,
+    token: String,
+    salt: String,
+}
+
+fn nd_params(auth: &NdAuth) -> Vec<(String, String)> {
+    vec![
+        ("u".into(), auth.user.clone()),
+        ("t".into(), auth.token.clone()),
+        ("s".into(), auth.salt.clone()),
+        ("v".into(), "1.16.1".into()),
+        ("c".into(), "NaviRadio".into()),
+        ("f".into(), "json".into()),
+    ]
+}
+
+async fn navidrome_login(
+    state: &AppState,
+    base_url: &str,
+    user: &str,
+    pass: &str,
+    typed_password: bool,
+) -> Result<NdAuth, String> {
+    let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
+    let resp = state
+        .http
+        .post(&url)
+        .json(&serde_json::json!({ "username": user, "password": pass }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed connecting to Navidrome: {}", e))?;
+    let status = resp.status();
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        let source = if typed_password {
+            "the password just typed into Navidrome Service Password"
+        } else {
+            "the saved password. The box starts empty, so type the current website password into Navidrome Service Password"
+        };
+        return Err(format!(
+            "Navidrome refused {source} for username \"{user}\". It has to be the same password as the Navidrome website. If you just tried several times, wait a minute and try once."
+        ));
+    }
+    if status.as_u16() == 429 {
+        return Err(
+            "Navidrome temporarily blocked logins after too many tries. Wait a minute, then rescan once."
+                .into(),
+        );
+    }
+    if !status.is_success() {
+        return Err(format!("Navidrome login failed with HTTP {}.", status));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|_| "Navidrome login did not return JSON.".to_string())?;
+    let token = json_str(&body["subsonicToken"]);
+    let salt = json_str(&body["subsonicSalt"]);
+    if token.is_empty() || salt.is_empty() {
+        return Err("Navidrome accepted the login but did not return a Subsonic token.".into());
+    }
+    let name = json_str(&body["username"]);
+    Ok(NdAuth {
+        user: if name.is_empty() { user.to_string() } else { name },
+        token,
+        salt,
+    })
+}
+
 async fn subsonic_get(
     state: &AppState,
     base_url: &str,
@@ -735,10 +804,16 @@ async fn subsonic_get(
     params: Vec<(String, String)>,
 ) -> Result<serde_json::Value, String> {
     let url = format!("{}/rest/{}", base_url.trim_end_matches('/'), endpoint);
+    let body = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
     let resp = state
         .http
-        .get(&url)
-        .query(&params)
+        .post(&url)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await
         .map_err(|e| format!("Failed connecting to Navidrome: {}", e))?;
@@ -777,6 +852,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     if !user.is_empty() {
         cfg.navidrome_user = user.to_string();
     }
+    let typed_password = !req.navidrome_pass.is_empty();
     if !req.navidrome_pass.is_empty() {
         cfg.navidrome_pass = req.navidrome_pass.clone();
     }
@@ -796,36 +872,15 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         return Err("Navidrome URL and service username are required.".into());
     }
 
-    let use_password = match subsonic_get(
+    let auth = navidrome_login(
         state,
         &cfg.navidrome_url,
-        "ping.view",
-        subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass),
+        &cfg.navidrome_user,
+        &cfg.navidrome_pass,
+        typed_password,
     )
-    .await
-    {
-        Ok(_) => false,
-        Err(e) if is_auth_error(&e) => {
-            match subsonic_get(
-                state,
-                &cfg.navidrome_url,
-                "ping.view",
-                subsonic_password_params(&cfg.navidrome_user, &cfg.navidrome_pass),
-            )
-            .await
-            {
-                Ok(_) => true,
-                Err(e2) if is_auth_error(&e2) => {
-                    return Err(format!(
-                        "Navidrome rejected username \"{}\". Rescan uses the service username and password on this page, not the listener sign-in. Type that password into Navidrome Service Password and try again. If you already did, wait a minute in case Navidrome temporarily blocked the login.",
-                        cfg.navidrome_user
-                    ));
-                }
-                Err(e2) => return Err(e2),
-            }
-        }
-        Err(e) => return Err(e),
-    };
+    .await?;
+    cfg.navidrome_user = auth.user.clone();
 
     {
         let conn = state.db.lock().unwrap();
@@ -850,7 +905,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     for folder_opt in folders_to_scan {
         let mut offset = 0usize;
         loop {
-            let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
+            let mut params = nd_params(&auth);
             params.push(("type".into(), "alphabeticalByName".into()));
             params.push(("size".into(), "500".into()));
             params.push(("offset".into(), offset.to_string()));
@@ -869,7 +924,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 if album_id.is_empty() {
                     continue;
                 }
-                let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
+                let mut params = nd_params(&auth);
                 params.push(("id".into(), album_id));
                 let album_json = subsonic_get(state, &cfg.navidrome_url, "getAlbum.view", params).await?;
                 let songs = json_items(&album_json["subsonic-response"]["album"]["song"]);
@@ -928,12 +983,10 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
 
     let mut similarity_pairs: Vec<(String, String)> = Vec::new();
     for (artist_name, artist_id) in unique_artist_ids.iter().take(60) {
-        let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
+        let mut params = nd_params(&auth);
         params.push(("id".into(), artist_id.clone()));
         params.push(("count".into(), "15".into()));
-        let url = format!("{}/rest/getArtistInfo2.view", cfg.navidrome_url);
-        if let Ok(resp) = state.http.get(&url).query(&params).send().await {
-            if let Ok(json) = resp.json::<serde_json::Value>().await {
+        if let Ok(json) = subsonic_get(state, &cfg.navidrome_url, "getArtistInfo2.view", params).await {
                 if let Some(sim_arr) =
                     json["subsonic-response"]["artistInfo2"]["similarArtist"].as_array()
                 {
