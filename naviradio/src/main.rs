@@ -102,6 +102,29 @@ fn subsonic_auth_params(user: &str, pass: &str) -> Vec<(String, String)> {
     ]
 }
 
+fn subsonic_password_params(user: &str, pass: &str) -> Vec<(String, String)> {
+    vec![
+        ("u".into(), user.into()),
+        ("p".into(), pass.into()),
+        ("v".into(), "1.16.1".into()),
+        ("c".into(), "NaviRadio".into()),
+        ("f".into(), "json".into()),
+    ]
+}
+
+fn nd_auth_params(use_password: bool, user: &str, pass: &str) -> Vec<(String, String)> {
+    if use_password {
+        subsonic_password_params(user, pass)
+    } else {
+        subsonic_auth_params(user, pass)
+    }
+}
+
+fn is_auth_error(message: &str) -> bool {
+    let m = message.to_lowercase();
+    m.contains("password") || m.contains("username") || m.contains("auth")
+}
+
 fn hash_pw(pw: &str) -> String {
     let mut h = Sha256::new();
     h.update(pw.as_bytes());
@@ -707,14 +730,11 @@ fn subsonic_failure(json: &serde_json::Value) -> Option<String> {
 
 async fn subsonic_get(
     state: &AppState,
+    base_url: &str,
     endpoint: &str,
     params: Vec<(String, String)>,
 ) -> Result<serde_json::Value, String> {
-    let cfg = {
-        let conn = state.db.lock().unwrap();
-        load_config(&conn)
-    };
-    let url = format!("{}/rest/{}", cfg.navidrome_url, endpoint);
+    let url = format!("{}/rest/{}", base_url.trim_end_matches('/'), endpoint);
     let resp = state
         .http
         .get(&url)
@@ -732,13 +752,91 @@ async fn subsonic_get(
     Ok(json)
 }
 
-async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), String> {
-    let cfg = {
+#[derive(Deserialize, Default)]
+struct ScanRequest {
+    #[serde(default)]
+    navidrome_url: String,
+    #[serde(default)]
+    navidrome_user: String,
+    #[serde(default)]
+    navidrome_pass: String,
+    #[serde(default)]
+    selected_folders: Option<Vec<String>>,
+}
+
+async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(usize, usize), String> {
+    let mut cfg = {
         let conn = state.db.lock().unwrap();
         load_config(&conn)
     };
+    let url = req.navidrome_url.trim();
+    if !url.is_empty() {
+        cfg.navidrome_url = url.trim_end_matches('/').to_string();
+    }
+    let user = req.navidrome_user.trim();
+    if !user.is_empty() {
+        cfg.navidrome_user = user.to_string();
+    }
+    if !req.navidrome_pass.is_empty() {
+        cfg.navidrome_pass = req.navidrome_pass.clone();
+    }
+    if let Some(folders) = &req.selected_folders {
+        cfg.selected_folders = folders.clone();
+    }
+    cfg.navidrome_user = cfg.navidrome_user.trim().to_string();
+    cfg.navidrome_url = cfg.navidrome_url.trim().trim_end_matches('/').to_string();
+
     if cfg.navidrome_pass.is_empty() {
-        return Err("Navidrome password is not configured yet.".into());
+        return Err(
+            "Enter the Navidrome password in Navidrome Service Password, then rescan. The listener sign-in does not scan the library."
+                .into(),
+        );
+    }
+    if cfg.navidrome_user.is_empty() || cfg.navidrome_url.is_empty() {
+        return Err("Navidrome URL and service username are required.".into());
+    }
+
+    let use_password = match subsonic_get(
+        state,
+        &cfg.navidrome_url,
+        "ping.view",
+        subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass),
+    )
+    .await
+    {
+        Ok(_) => false,
+        Err(e) if is_auth_error(&e) => {
+            match subsonic_get(
+                state,
+                &cfg.navidrome_url,
+                "ping.view",
+                subsonic_password_params(&cfg.navidrome_user, &cfg.navidrome_pass),
+            )
+            .await
+            {
+                Ok(_) => true,
+                Err(e2) if is_auth_error(&e2) => {
+                    return Err(format!(
+                        "Navidrome rejected username \"{}\". Rescan uses the service username and password on this page, not the listener sign-in. Type that password into Navidrome Service Password and try again. If you already did, wait a minute in case Navidrome temporarily blocked the login.",
+                        cfg.navidrome_user
+                    ));
+                }
+                Err(e2) => return Err(e2),
+            }
+        }
+        Err(e) => return Err(e),
+    };
+
+    {
+        let conn = state.db.lock().unwrap();
+        save_setting(&conn, "navidrome_url", &cfg.navidrome_url);
+        save_setting(&conn, "navidrome_user", &cfg.navidrome_user);
+        save_setting(&conn, "navidrome_pass", &cfg.navidrome_pass);
+        save_setting(
+            &conn,
+            "selected_folders",
+            &serde_json::to_string(&cfg.selected_folders).unwrap_or_else(|_| "[]".into()),
+        );
     }
 
     let mut all_tracks = Vec::new();
@@ -752,7 +850,7 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
     for folder_opt in folders_to_scan {
         let mut offset = 0usize;
         loop {
-            let mut params = subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass);
+            let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
             params.push(("type".into(), "alphabeticalByName".into()));
             params.push(("size".into(), "500".into()));
             params.push(("offset".into(), offset.to_string()));
@@ -760,7 +858,7 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
                 params.push(("musicFolderId".into(), fid.clone()));
             }
 
-            let json = subsonic_get(state, "getAlbumList2.view", params).await?;
+            let json = subsonic_get(state, &cfg.navidrome_url, "getAlbumList2.view", params).await?;
             let albums = json_items(&json["subsonic-response"]["albumList2"]["album"]);
             if albums.is_empty() {
                 break;
@@ -771,9 +869,9 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
                 if album_id.is_empty() {
                     continue;
                 }
-                let mut params = subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass);
+                let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
                 params.push(("id".into(), album_id));
-                let album_json = subsonic_get(state, "getAlbum.view", params).await?;
+                let album_json = subsonic_get(state, &cfg.navidrome_url, "getAlbum.view", params).await?;
                 let songs = json_items(&album_json["subsonic-response"]["album"]["song"]);
                 for s in &songs {
                     let id = json_str(&s["id"]);
@@ -830,7 +928,7 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
 
     let mut similarity_pairs: Vec<(String, String)> = Vec::new();
     for (artist_name, artist_id) in unique_artist_ids.iter().take(60) {
-        let mut params = subsonic_auth_params(&cfg.navidrome_user, &cfg.navidrome_pass);
+        let mut params = nd_auth_params(use_password, &cfg.navidrome_user, &cfg.navidrome_pass);
         params.push(("id".into(), artist_id.clone()));
         params.push(("count".into(), "15".into()));
         let url = format!("{}/rest/getArtistInfo2.view", cfg.navidrome_url);
@@ -1004,8 +1102,11 @@ async fn perform_scan_and_build(state: &AppState) -> Result<(usize, usize), Stri
     Ok((all_tracks.len(), stations_built))
 }
 
-async fn admin_rescan(State(state): State<AppState>) -> impl IntoResponse {
-    match perform_scan_and_build(&state).await {
+async fn admin_rescan(
+    State(state): State<AppState>,
+    Json(req): Json<ScanRequest>,
+) -> impl IntoResponse {
+    match perform_scan_and_build(&state, &req).await {
         Ok((tracks, stations)) => Json(serde_json::json!({
             "status": "ok",
             "tracks_indexed": tracks,
@@ -1078,7 +1179,7 @@ async fn main() {
 
     let startup_state = admin_state.clone();
     tokio::spawn(async move {
-        let _ = perform_scan_and_build(&startup_state).await;
+        let _ = perform_scan_and_build(&startup_state, &ScanRequest::default()).await;
     });
 
     let admin_app = build_router(admin_state);

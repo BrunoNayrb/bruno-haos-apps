@@ -186,11 +186,12 @@
           </div>
           <div class="field">
             <label>Navidrome Service Username</label>
-            <input type="text" id="cfgUser" />
+            <input type="text" id="cfgUser" autocomplete="off" />
           </div>
           <div class="field">
             <label>Navidrome Service Password</label>
-            <input type="password" id="cfgPass" placeholder="Leave blank to keep existing" />
+            <input type="password" id="cfgPass" autocomplete="new-password" placeholder="Required for the scan. Not the listener sign-in." />
+            <p style="color:var(--muted); font-size:0.78rem; margin-top:6px;">The scan uses these two fields. Signing in at the top does not.</p>
           </div>
           <div class="field">
             <label>
@@ -494,17 +495,28 @@
     }
 
     async function triggerRescan() {
-      await saveAdminConfig();
       const btn = document.getElementById('rescanBtn');
       btn.disabled = true;
-      document.getElementById('scanStatus').textContent = 'Scanning Navidrome library and building stations...';
-      const res = await fetch('api/admin/rescan', { method: 'POST' });
+      document.getElementById('scanStatus').textContent = 'Checking the Navidrome login and scanning the library...';
+      const selected_folders = Array.from(document.querySelectorAll('.folder-cb:checked')).map(cb => cb.value);
+      const res = await fetch('api/admin/rescan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          navidrome_url: document.getElementById('cfgUrl').value.trim(),
+          navidrome_user: document.getElementById('cfgUser').value.trim(),
+          navidrome_pass: document.getElementById('cfgPass').value,
+          selected_folders
+        })
+      });
       const data = await res.json();
       btn.disabled = false;
       if (res.ok) {
+        document.getElementById('cfgPass').value = '';
         document.getElementById('scanStatus').textContent =
           `Indexed ${data.tracks_indexed} tracks and built ${data.stations_created} dynamic stations.`;
         await loadStations();
+        await loadAdminConfig();
       } else {
         document.getElementById('scanStatus').textContent = 'Error: ' + (data.message || 'Scan failed');
       }
