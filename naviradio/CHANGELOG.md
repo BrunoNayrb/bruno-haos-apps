@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.14
+
+- Click the album art in the player to open a large player. The art grows into the center and the screen slides up. The controls under it are larger.
+- The chevron slides it back down. Stop closes it too.
+
 ## 0.2.13
 
 - The player has a mute button with the other controls, and a volume slider to the right of them.
