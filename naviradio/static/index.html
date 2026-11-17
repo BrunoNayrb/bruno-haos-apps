@@ -357,10 +357,31 @@
       transform: translateY(100%);
       transition: transform 0.52s cubic-bezier(0.22, 0.8, 0.24, 1);
       pointer-events: none;
+      overflow: hidden;
     }
     .now-screen.open { transform: translateY(0); pointer-events: auto; }
+    .now-bg {
+      position: absolute;
+      left: -20%;
+      top: -20%;
+      width: 140%;
+      height: 140%;
+      object-fit: cover;
+      filter: blur(70px) brightness(0.4) saturate(1.45);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .now-bg:not([src]), .now-bg[src=""] { opacity: 0; }
+    .now-veil {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom, rgba(15, 17, 21, 0.2), rgba(15, 17, 21, 0.78));
+      pointer-events: none;
+      z-index: 0;
+    }
     button.now-close {
       position: absolute;
+      z-index: 1;
       top: 16px;
       left: 50%;
       width: 52px;
@@ -374,6 +395,7 @@
     button.now-close:hover { background: transparent; color: var(--text); }
     .now-art {
       position: absolute;
+      z-index: 1;
       top: 78px;
       left: 50%;
       width: min(380px, 42vh, calc(100vw - 96px));
@@ -388,6 +410,7 @@
     .now-art.settled { opacity: 1; }
     .now-controls {
       position: absolute;
+      z-index: 1;
       left: 0;
       right: 0;
       top: calc(78px + min(380px, 42vh, calc(100vw - 96px)) + 28px);
@@ -414,12 +437,58 @@
     .now-progress span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; }
     .now-transport { display: flex; align-items: center; justify-content: center; gap: 16px; width: 100%; }
     .now-volume-group {
+      position: relative;
+      width: min(460px, 100%);
+      height: 58px;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 8px;
+    }
+    .now-volume-group .now-icon {
+      position: absolute;
+      left: calc(50% - min(110px, 28vw) - 66px);
+      top: 0;
     }
     .now-volume { width: min(220px, 56vw); }
+    .up-next { width: min(760px, 100%); margin-top: 6px; }
+    .up-next h3 {
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .up-row { display: flex; justify-content: center; gap: 16px; }
+    .up-next.empty { display: none; }
+    button.up-card {
+      width: 132px;
+      padding: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      border-radius: 8px;
+    }
+    button.up-card:hover { background: transparent; }
+    button.up-card img {
+      width: 132px;
+      height: 132px;
+      object-fit: cover;
+      border-radius: 8px;
+      display: block;
+      margin-bottom: 8px;
+      background: rgba(0, 0, 0, 0.25);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    }
+    button.up-card strong, button.up-card span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    button.up-card strong { font-size: 0.82rem; }
+    button.up-card span { color: var(--muted); font-size: 0.74rem; font-weight: 500; margin-top: 2px; }
     button.now-icon {
       width: 58px;
       height: 58px;
@@ -596,6 +665,8 @@
   </div>
 
   <div id="nowScreen" class="now-screen" aria-hidden="true">
+    <img id="nowBg" class="now-bg" alt="" />
+    <div class="now-veil"></div>
     <button class="now-close" id="nowClose" title="Close player"></button>
     <img id="nowArt" class="now-art" alt="" />
     <div class="now-controls">
@@ -616,6 +687,10 @@
         <label class="volume now-volume">
           <input class="volume-slider" id="nowVolume" type="range" min="0" max="100" value="80" aria-label="Volume" />
         </label>
+      </div>
+      <div class="up-next empty" id="upNextWrap">
+        <h3>Up next</h3>
+        <div class="up-row" id="upNext"></div>
       </div>
     </div>
   </div>
@@ -1076,6 +1151,7 @@
       if (current) {
         queue = upcomingAfter(current);
         renderQueuePanel();
+        renderUpNext();
       }
     }
 
@@ -1160,6 +1236,7 @@
       document.getElementById('nowArtist').textContent = current.artist + ' — ' + current.album;
       const src = document.getElementById('npCover').src;
       document.getElementById('nowArt').src = src;
+      document.getElementById('nowBg').src = src;
       const flyer = document.getElementById('artFlyer');
       if (!flyer.classList.contains('show')) flyer.src = src;
     }
@@ -1189,6 +1266,7 @@
       const screen = document.getElementById('nowScreen');
       screen.classList.add('open');
       screen.setAttribute('aria-hidden', 'false');
+      renderUpNext();
       const flyer = document.getElementById('artFlyer');
       const art = document.getElementById('nowArt');
       art.classList.remove('settled');
@@ -1283,7 +1361,36 @@
       document.getElementById('playerBar').classList.add('visible');
       highlightCurrent();
       renderQueuePanel();
+      renderUpNext();
       syncPlayIcon();
+    }
+
+    function renderUpNext() {
+      const wrap = document.getElementById('upNextWrap');
+      const row = document.getElementById('upNext');
+      row.innerHTML = '';
+      const upcoming = queue.slice(0, 4);
+      wrap.classList.toggle('empty', upcoming.length === 0);
+      upcoming.forEach((track, index) => {
+        const card = document.createElement('button');
+        card.className = 'up-card';
+        card.title = 'Play ' + track.title;
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = 'api/cover/' + encodeURIComponent(track.id);
+        const title = document.createElement('strong');
+        title.textContent = track.title;
+        const artist = document.createElement('span');
+        artist.textContent = track.artist;
+        card.appendChild(img);
+        card.appendChild(title);
+        card.appendChild(artist);
+        card.onclick = () => {
+          queue = queue.slice(index + 1);
+          beginTrack(track, false);
+        };
+        row.appendChild(card);
+      });
     }
 
     function highlightCurrent() {

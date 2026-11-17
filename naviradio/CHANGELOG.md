@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.16
+
+- The large player uses a blurred copy of the cover as its background.
+- Up next shows the following songs under the volume slider. Choosing one plays it.
+- The large volume slider stays centered. Mute sits to its left.
+
 ## 0.2.15
 
 - Mute sits with the volume slider, not in the play controls.
