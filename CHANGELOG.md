@@ -6,6 +6,13 @@ Add-on versions are the `version` field in each add-on's `config.yaml`. Home Ass
 
 ## NaviRadio
 
+### 0.2.8 — 2026-11-17
+
+- The bottom play button is round, and the player controls sit in one group with a progress bar.
+- Each station in the sidebar has a heart at the end of its name.
+- Genre Stations are listed above Artist Stations.
+- Shuffle is on by default. It spreads songs so one artist does not play as a block. The station page has a Shuffle button that starts playback immediately. The player has a shuffle button too.
+
 ### 0.2.7 — 2026-11-17
 
 - Stations are listed in a sidebar under Favorites, Artist Stations, and Genre Stations.
