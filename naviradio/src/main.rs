@@ -415,6 +415,60 @@ async fn api_toggle_favorite(
     Ok(Json(serde_json::json!({ "status": "ok", "is_favorite": val })))
 }
 
+async fn api_station_tracks(
+    State(state): State<AppState>,
+    Path(station_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<TrackOut>>, StatusCode> {
+    if !is_authenticated(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let conn = state.db.lock().unwrap();
+    let (core_raw, fringe_raw): (String, String) = conn
+        .query_row(
+            "SELECT core_tracks_json, fringe_tracks_json FROM stations WHERE id = ?1",
+            params![station_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let core_ids: Vec<String> = serde_json::from_str(&core_raw).unwrap_or_default();
+    let fringe_ids: Vec<String> = serde_json::from_str(&fringe_raw).unwrap_or_default();
+
+    let mut load = |ids: &[String], is_fringe: bool, out: &mut Vec<TrackOut>| {
+        for tid in ids {
+            if let Ok(t) = conn.query_row(
+                "SELECT id, title, artist, album, duration FROM tracks WHERE id = ?1",
+                params![tid],
+                |r| {
+                    Ok(TrackOut {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        artist: r.get(2)?,
+                        album: r.get(3)?,
+                        duration: r.get(4)?,
+                        is_fringe,
+                    })
+                },
+            ) {
+                out.push(t);
+            }
+        }
+    };
+
+    let mut tracks = Vec::new();
+    load(&core_ids, false, &mut tracks);
+    load(&fringe_ids, true, &mut tracks);
+    tracks.sort_by(|a, b| {
+        a.artist
+            .to_lowercase()
+            .cmp(&b.artist.to_lowercase())
+            .then(a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+            .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+    });
+    Ok(Json(tracks))
+}
+
 async fn api_station_queue(
     State(state): State<AppState>,
     Path(station_id): Path<String>,
@@ -1255,6 +1309,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/login", post(api_login))
         .route("/api/stations", get(api_stations))
         .route("/api/stations/:id/favorite", post(api_toggle_favorite))
+        .route("/api/stations/:id/tracks", get(api_station_tracks))
         .route("/api/stations/:id/queue", get(api_station_queue))
         .route("/api/stream/:id", get(proxy_stream))
         .route("/api/cover/:id", get(proxy_cover));
@@ -1318,7 +1373,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.5 listening admin={ingress_port} public={public_port}"
+        "version 0.2.7 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
