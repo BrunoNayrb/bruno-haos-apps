@@ -6,6 +6,12 @@ Add-on versions are the `version` field in each add-on's `config.yaml`. Home Ass
 
 ## NaviRadio
 
+### 0.2.9 — 2026-11-17
+
+- The bottom bar stays hidden until a song is playing or paused.
+- Stop ends playback and hides the bar.
+- The play button is a filled circle with the icon centered.
+
 ### 0.2.8 — 2026-11-17
 
 - The bottom play button is round, and the player controls sit in one group with a progress bar.
