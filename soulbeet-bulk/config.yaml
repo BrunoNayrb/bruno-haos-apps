@@ -2,10 +2,10 @@ name: Soulbeet Bulk
 version: 0.1.26
 slug: soulbeet_bulk_v2
 description: >-
-  Fork of Soulbeet that imports a CSV of songs into a library you choose.
-  It searches album versions first, skips live recordings, and queues the
-  downloads. Beets databases stay on local storage so imports do not lock
-  on a network share.
+  Home Assistant package of Soulbeet by Terry Raimondo (terry90/soulbeet).
+  Builds from the fork BrunoNayrb/soulbeet, which adds CSV import.
+  Beets databases stay on local storage so imports do not lock on a network share.
+url: https://github.com/terry90/soulbeet
 image: ghcr.io/brunonayrb/soulbeet-bulk
 arch:
   - amd64

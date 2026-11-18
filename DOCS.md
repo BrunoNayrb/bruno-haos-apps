@@ -1,14 +1,10 @@
 # Soulbeet add-on documentation
 
-This add-on repository and the Soulbeet fork it builds were written with AI assistance (xAI Grok). The behavior below is what the code does now. Paths are examples. Yours will be different.
+Soulbeet is Terry Raimondo's application: [terry90/soulbeet](https://github.com/terry90/soulbeet), MIT license. [BrunoNayrb/soulbeet](https://github.com/BrunoNayrb/soulbeet) is a fork of that repository. These add-ons package it. They are not a separate project.
 
-## The two add-ons
+**Soulbeet** runs his published image and stores the beets databases on the Home Assistant disk.
 
-**Soulbeet** runs the official app and adds the local database fix.
-
-**Soulbeet Bulk** runs the fork. It has the database fix and CSV import.
-
-The bulk add-on uses host port 9766 so it can run beside the original add-on on port 9765.
+**Soulbeet Bulk** runs the fork, which adds CSV import. It uses host port 9766 so it can run beside Soulbeet on port 9765.
 
 ## Folders
 

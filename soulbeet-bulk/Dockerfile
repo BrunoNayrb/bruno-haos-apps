@@ -1,4 +1,5 @@
-# Build from your fork using the official method
+# Build from the fork of https://github.com/terry90/soulbeet
+# Fork: https://github.com/BrunoNayrb/soulbeet
 FROM rust:1.99-bookworm AS builder
 ARG CACHEBUST=8
 RUN apt-get update && apt-get install -y --no-install-recommends \
