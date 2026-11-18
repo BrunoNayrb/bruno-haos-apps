@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.24
+
+- Genre stations use broad styles. Hip-Hop and Rap are one station. Alternative stays Alternative instead of collecting every nearby style.
+- Decade stations such as "90s Rock" and "2000s Alternative" are added when that decade has at least 40 songs. Those songs also stay on the genre station.
+- Artist stations mix in similar-sounding artists from Navidrome, not only songs from the same genre.
+- Navidrome is checked every 10 minutes. New albums are picked up without a manual rescan.
+
 ## 0.2.23
 
 - The admin scan line updates when the scan finishes. It says how many tracks were indexed and how many stations were created, instead of staying on "scanning the library."

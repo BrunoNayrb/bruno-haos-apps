@@ -895,7 +895,9 @@
     }
 
     function stationGroup(st) {
-      return st.category === 'Artist Stations' ? 'Artist Stations' : 'Genre Stations';
+      if (st.category === 'Artist Stations') return 'Artist Stations';
+      if (st.category === 'Decade Stations') return 'Decade Stations';
+      return 'Genre Stations';
     }
 
     function fmtTime(sec) {
@@ -930,9 +932,11 @@
       }
       const favorites = stations.filter(s => s.is_favorite).sort((a, b) => a.name.localeCompare(b.name));
       const artists = stations.filter(s => s.category === 'Artist Stations').sort((a, b) => a.name.localeCompare(b.name));
-      const genres = stations.filter(s => s.category !== 'Artist Stations').sort((a, b) => a.name.localeCompare(b.name));
+      const decades = stations.filter(s => s.category === 'Decade Stations').sort((a, b) => a.name.localeCompare(b.name));
+      const genres = stations.filter(s => s.category === 'Genre Stations').sort((a, b) => a.name.localeCompare(b.name));
       addSideSection(sidebar, 'Favorites', favorites, true);
       addSideSection(sidebar, 'Genre Stations', genres, false);
+      if (decades.length) addSideSection(sidebar, 'Decade Stations', decades, false);
       addSideSection(sidebar, 'Artist Stations', artists, false);
     }
 

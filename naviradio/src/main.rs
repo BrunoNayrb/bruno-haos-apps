@@ -272,8 +272,8 @@ fn style_by_key(key: &str) -> Option<&'static StyleInfo> {
     STYLES.iter().find(|style| style.key == key)
 }
 
-fn family_neighbor(family: &str) -> Option<&'static str> {
-    match family {
+fn broad_neighbor(style: &str) -> Option<&'static str> {
+    match style {
         "punk" | "alternative" | "metal" | "blues" | "folk" => Some("rock"),
         "electronic" => Some("pop"),
         "country" => Some("folk"),
@@ -281,6 +281,48 @@ fn family_neighbor(family: &str) -> Option<&'static str> {
         "soul" => Some("hiphop"),
         _ => None,
     }
+}
+
+fn broad_style(style_key: &str) -> (&'static str, &'static str) {
+    match style_key {
+        "hip-hop" | "rap" => ("hiphop", "Hip-Hop"),
+        "alt-rock" | "indie-rock" | "indie" | "alternative" | "shoegaze" | "britpop" | "grunge" => {
+            ("alternative", "Alternative")
+        }
+        "pop-punk" | "emo" | "hardcore" | "punk" => ("punk", "Punk"),
+        "heavy-metal" | "death-metal" | "black-metal" | "thrash" | "doom" | "metalcore"
+        | "nu-metal" | "industrial" | "metal" => ("metal", "Metal"),
+        "pop" | "electropop" | "kpop" => ("pop", "Pop"),
+        "drum-bass" | "dubstep" | "house" | "techno" | "trance" | "ambient" | "electronic" => {
+            ("electronic", "Electronic")
+        }
+        "rnb" | "funk" | "soul" => ("soul", "Soul & R&B"),
+        "country" => ("country", "Country"),
+        "folk" | "folk-rock" => ("folk", "Folk"),
+        "blues" => ("blues", "Blues"),
+        "jazz" => ("jazz", "Jazz"),
+        "reggae" => ("reggae", "Reggae"),
+        "classical" => ("classical", "Classical"),
+        "soundtrack" => ("soundtrack", "Soundtrack"),
+        "latin" => ("latin", "Latin"),
+        "rock" | "classic-rock" | "hard-rock" | "pop-rock" | "garage-rock" | "prog-rock"
+        | "psych-rock" | "southern-rock" | "blues-rock" => ("rock", "Rock"),
+        _ => ("mix", "Mix"),
+    }
+}
+
+fn decade_label(year: u16) -> Option<&'static str> {
+    Some(match year {
+        1950..=1959 => "50s",
+        1960..=1969 => "60s",
+        1970..=1979 => "70s",
+        1980..=1989 => "80s",
+        1990..=1999 => "90s",
+        2000..=2009 => "2000s",
+        2010..=2019 => "2010s",
+        2020..=2029 => "2020s",
+        _ => return None,
+    })
 }
 
 struct StationBucket {
@@ -1450,10 +1492,33 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
 
     let mut all_tracks = Vec::new();
+    let mut track_years: HashMap<String, u16> = HashMap::new();
     let folders_to_scan = if cfg.selected_folders.is_empty() {
         vec![None]
     } else {
         cfg.selected_folders.iter().cloned().map(Some).collect()
+    };
+
+    let mut newest_params = nd_params(&auth);
+    newest_params.push(("type".into(), "newest".into()));
+    newest_params.push(("size".into(), "40".into()));
+    let library_stamp = match subsonic_get(
+        state,
+        &cfg.navidrome_url,
+        "getAlbumList2.view",
+        newest_params,
+    )
+    .await
+    {
+        Ok(json) => json_items(&json["subsonic-response"]["albumList2"]["album"])
+            .iter()
+            .map(|album| format!("{}:{}", json_str(&album["id"]), json_str(&album["songCount"])))
+            .collect::<Vec<_>>()
+            .join(","),
+        Err(err) => {
+            log_ha(&format!("could not read newest albums: {err}"));
+            String::new()
+        }
     };
 
     // search3 with a blank query returns no songs on Navidrome. Walk albums instead.
@@ -1482,7 +1547,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 let mut params = nd_params(&auth);
                 params.push(("id".into(), album_id));
                 let album_json = subsonic_get(state, &cfg.navidrome_url, "getAlbum.view", params).await?;
-                let songs = json_items(&album_json["subsonic-response"]["album"]["song"]);
+                let album_body = &album_json["subsonic-response"]["album"];
+                let album_year = album_body["year"].as_u64().unwrap_or(0) as u16;
+                let songs = json_items(&album_body["song"]);
                 for s in &songs {
                     let id = json_str(&s["id"]);
                     let title = s["title"].as_str().unwrap_or("Unknown").to_string();
@@ -1502,6 +1569,15 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                         .map(|style| style.key.to_string())
                         .unwrap_or_default();
                     if !id.is_empty() {
+                        let song_year = s["year"].as_u64().unwrap_or(0) as u16;
+                        let year = if (1950..2030).contains(&song_year) {
+                            song_year
+                        } else {
+                            album_year
+                        };
+                        if (1950..2030).contains(&year) {
+                            track_years.insert(id.clone(), year);
+                        }
                         all_tracks.push((
                             id,
                             title,
@@ -1701,71 +1777,49 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
     }
 
-    let mut buckets: HashMap<String, StationBucket> = HashMap::new();
+    let mut genre_buckets: HashMap<String, StationBucket> = HashMap::new();
+    let mut style_names: HashMap<String, HashSet<String>> = HashMap::new();
     for track in &all_tracks {
-        let style = style_by_key(&track.6);
-        let key = style.map(|item| item.key.to_string()).unwrap_or_else(|| "mix".to_string());
-        let bucket = buckets.entry(key).or_insert_with(|| StationBucket {
-            label: style.map(|item| item.label.to_string()).unwrap_or_else(|| "Mix".to_string()),
-            family: style.map(|item| item.family.to_string()).unwrap_or_else(|| "mix".to_string()),
+        let (broad, label) = broad_style(&track.6);
+        let bucket = genre_buckets.entry(broad.to_string()).or_insert_with(|| StationBucket {
+            label: label.to_string(),
+            family: broad.to_string(),
             track_ids: Vec::new(),
             cover: track.8.clone(),
             style_labels: HashSet::new(),
         });
-        if bucket.style_labels.is_empty() {
-            let label = bucket.label.clone();
-            bucket.style_labels.insert(label);
-        }
         bucket.track_ids.push(track.0.clone());
+        if let Some(style) = style_by_key(&track.6) {
+            style_names.entry(broad.to_string()).or_default().insert(style.label.to_string());
+        }
+    }
+    let small_keys: Vec<String> = genre_buckets
+        .iter()
+        .filter(|(_, bucket)| bucket.track_ids.len() < 25)
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in small_keys {
+        let Some(neighbor) = broad_neighbor(&key) else {
+            continue;
+        };
+        if !genre_buckets.contains_key(neighbor) {
+            continue;
+        }
+        let Some(small) = genre_buckets.remove(&key) else {
+            continue;
+        };
+        if let Some(names) = style_names.remove(&key) {
+            style_names.entry(neighbor.to_string()).or_default().extend(names);
+        }
+        if let Some(dest) = genre_buckets.get_mut(neighbor) {
+            dest.track_ids.extend(small.track_ids);
+        }
     }
 
-    let mut frozen: HashSet<String> = HashSet::new();
-    loop {
-        let small_key = buckets
-            .iter()
-            .filter(|(key, bucket)| !frozen.contains(*key) && bucket.track_ids.len() < 25)
-            .min_by_key(|(_, bucket)| bucket.track_ids.len())
-            .map(|(key, _)| key.clone());
-        let Some(small_key) = small_key else {
-            break;
-        };
-        let family = buckets.get(&small_key).map(|bucket| bucket.family.clone());
-        let Some(family) = family else {
-            break;
-        };
-        let small_len = buckets.get(&small_key).map(|bucket| bucket.track_ids.len()).unwrap_or(0);
-        let mut dest_key = buckets
-            .iter()
-            .filter(|(key, bucket)| *key != &small_key && bucket.family == family)
-            .max_by_key(|(_, bucket)| bucket.track_ids.len())
-            .map(|(key, _)| key.clone());
-        if dest_key.is_none() && small_len < 15 {
-            if let Some(neighbor) = family_neighbor(&family) {
-                dest_key = buckets
-                    .iter()
-                    .filter(|(_, bucket)| bucket.family == neighbor)
-                    .max_by_key(|(_, bucket)| bucket.track_ids.len())
-                    .map(|(key, _)| key.clone());
-            }
-        }
-        if let Some(dest_key) = dest_key {
-            let Some(small) = buckets.remove(&small_key) else {
-                break;
-            };
-            let moved: HashSet<String> = small.track_ids.iter().cloned().collect();
-            let new_style = dest_key.clone();
-            if let Some(dest) = buckets.get_mut(&dest_key) {
-                dest.track_ids.extend(small.track_ids);
-                dest.style_labels.extend(small.style_labels);
-                dest.style_labels.insert(small.label);
-            }
-            for track in &mut all_tracks {
-                if moved.contains(&track.0) {
-                    track.6 = new_style.clone();
-                }
-            }
-        } else {
-            frozen.insert(small_key);
+    let mut track_broad: HashMap<String, String> = HashMap::new();
+    for (broad, bucket) in &genre_buckets {
+        for id in &bucket.track_ids {
+            track_broad.insert(id.clone(), broad.clone());
         }
     }
 
@@ -1778,44 +1832,16 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             params![track.0, track.1, track.2, track.3, track.4, track.5, track.6, track.7, track.8],
         );
     }
-    for (key, bucket) in &buckets {
-        let core_set: HashSet<&String> = bucket.track_ids.iter().collect();
-        let mut station_artists: HashSet<String> = HashSet::new();
-        for track in &all_tracks {
-            if core_set.contains(&track.0) {
-                station_artists.insert(track.2.to_lowercase());
-            }
-        }
-        let mut similar_artists: HashSet<String> = HashSet::new();
-        for (left, right) in &similarity_pairs {
-            if station_artists.contains(left) {
-                similar_artists.insert(right.clone());
-            }
-            if station_artists.contains(right) {
-                similar_artists.insert(left.clone());
-            }
-        }
-        let mut fringe_ids = Vec::new();
-        for track in &all_tracks {
-            if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
-                continue;
-            }
-            let same_family = style_by_key(&track.6)
-                .map(|style| style.family == bucket.family)
-                .unwrap_or(false);
-            if same_family {
-                fringe_ids.push(track.0.clone());
-            }
-        }
-        let fringe_cap = bucket.track_ids.len() / 5;
-        if fringe_ids.len() > fringe_cap {
-            fringe_ids.shuffle(&mut rand::thread_rng());
-            fringe_ids.truncate(fringe_cap);
-        }
-        let mut included: Vec<String> = bucket.style_labels.iter().cloned().collect();
-        included.sort();
-        let description = format!("Includes {}", included.join(", "));
-        let st_id = format!("style-{}", key.replace(':', "-"));
+
+    for (broad, bucket) in &genre_buckets {
+        let mut names: Vec<String> = style_names.get(broad).map(|set| set.iter().cloned().collect()).unwrap_or_default();
+        names.sort();
+        let description = if names.is_empty() {
+            bucket.label.clone()
+        } else {
+            format!("Includes {}", names.join(", "))
+        };
+        let st_id = format!("genre-{broad}");
         let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
@@ -1823,102 +1849,219 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             params![
                 st_id,
                 bucket.label,
-                "Dynamic Genre Stations",
+                "Genre Stations",
                 description,
                 serde_json::to_string(&bucket.track_ids).unwrap(),
-                serde_json::to_string(&fringe_ids).unwrap(),
+                "[]",
                 bucket.cover,
                 is_fav
             ],
         );
         placed += bucket.track_ids.len();
         stations_built += 1;
-        log_ha(&format!(
-            "genre station {} core={} fringe={} {}",
-            bucket.label,
-            bucket.track_ids.len(),
-            fringe_ids.len(),
-            description
-        ));
+        log_ha(&format!("genre station {} songs={}", bucket.label, bucket.track_ids.len()));
     }
-    log_ha(&format!(
-        "genre stations={} placed={} indexed={}",
-        stations_built,
-        placed,
-        all_tracks.len()
-    ));
 
-    let mut artist_tracks: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+    let mut decade_buckets: HashMap<String, StationBucket> = HashMap::new();
     for track in &all_tracks {
-        artist_tracks.entry(track.2.clone()).or_default().push((
-            track.0.clone(),
-            track.6.clone(),
-            track.8.clone(),
-        ));
+        let Some(year) = track_years.get(&track.0).copied() else {
+            continue;
+        };
+        let Some(decade) = decade_label(year) else {
+            continue;
+        };
+        let Some(broad) = track_broad.get(&track.0) else {
+            continue;
+        };
+        let Some(genre) = genre_buckets.get(broad) else {
+            continue;
+        };
+        let key = format!("{decade}-{broad}");
+        let bucket = decade_buckets.entry(key).or_insert_with(|| StationBucket {
+            label: format!("{decade} {}", genre.label),
+            family: broad.clone(),
+            track_ids: Vec::new(),
+            cover: track.8.clone(),
+            style_labels: HashSet::new(),
+        });
+        bucket.track_ids.push(track.0.clone());
     }
-
-    for (artist_name, tracks) in &artist_tracks {
-        if tracks.len() < 20 {
+    for (key, bucket) in &decade_buckets {
+        if bucket.track_ids.len() < 40 {
+            log_ha(&format!(
+                "decade skipped {} ({} songs)",
+                bucket.label,
+                bucket.track_ids.len()
+            ));
             continue;
         }
-        let cover = &tracks[0].2;
-        let core_ids: Vec<String> = tracks.iter().map(|track| track.0.clone()).collect();
-        let core_set: HashSet<&String> = core_ids.iter().collect();
-        let artist_family = tracks.iter().find_map(|track| {
-            style_by_key(&track.1).map(|style| style.family.to_string())
-        });
-        let mut similar_artists: HashSet<String> = HashSet::new();
-        let artist_low = artist_name.to_lowercase();
-        for (left, right) in &similarity_pairs {
-            if left == &artist_low {
-                similar_artists.insert(right.clone());
-            }
-            if right == &artist_low {
-                similar_artists.insert(left.clone());
-            }
-        }
-        let mut fringe_ids = Vec::new();
-        if let Some(family) = artist_family {
-            for track in &all_tracks {
-                if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
-                    continue;
-                }
-                let same_family = style_by_key(&track.6)
-                    .map(|style| style.family == family)
-                    .unwrap_or(false);
-                if same_family {
-                    fringe_ids.push(track.0.clone());
-                }
-            }
-        }
-        let fringe_cap = core_ids.len() / 5;
-        if fringe_ids.len() > fringe_cap {
-            fringe_ids.shuffle(&mut rand::thread_rng());
-            fringe_ids.truncate(fringe_cap);
-        }
-        let st_id = format!(
-            "artist-{}",
-            artist_name.to_lowercase().replace([' ', '.', '&', '/'], "-")
-        );
+        let st_id = format!("decade-{key}");
         let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 st_id,
-                format!("{} Radio", artist_name),
+                bucket.label,
+                "Decade Stations",
+                format!("{} songs from that decade", bucket.track_ids.len()),
+                serde_json::to_string(&bucket.track_ids).unwrap(),
+                "[]",
+                bucket.cover,
+                is_fav
+            ],
+        );
+        stations_built += 1;
+        log_ha(&format!("decade station {} songs={}", bucket.label, bucket.track_ids.len()));
+    }
+
+    let mut by_artist: HashMap<String, Vec<String>> = HashMap::new();
+    let mut artist_display: HashMap<String, String> = HashMap::new();
+    let mut artist_cover: HashMap<String, String> = HashMap::new();
+    for track in &all_tracks {
+        let key = track.2.to_lowercase();
+        by_artist.entry(key.clone()).or_default().push(track.0.clone());
+        artist_display.entry(key.clone()).or_insert_with(|| track.2.clone());
+        artist_cover.entry(key).or_insert_with(|| track.8.clone());
+    }
+    for (artist_key, own_ids) in &by_artist {
+        if own_ids.len() < 20 {
+            continue;
+        }
+        let mut mix = own_ids.clone();
+        let mut heard: Vec<String> = Vec::new();
+        let mut used = HashSet::new();
+        let mut added = 0usize;
+        for (left, right) in &similarity_pairs {
+            if left != artist_key || !used.insert(right.clone()) {
+                continue;
+            }
+            let Some(other_ids) = by_artist.get(right) else {
+                continue;
+            };
+            if other_ids.is_empty() {
+                continue;
+            }
+            if let Some(name) = artist_display.get(right) {
+                heard.push(name.clone());
+            }
+            for id in other_ids {
+                if added >= own_ids.len() {
+                    break;
+                }
+                mix.push(id.clone());
+                added += 1;
+            }
+            if added >= own_ids.len() {
+                break;
+            }
+        }
+        let artist_name = artist_display.get(artist_key).map(|name| name.as_str()).unwrap_or(artist_key);
+        let description = if heard.is_empty() {
+            format!("Songs by {artist_name}")
+        } else {
+            let shown = heard.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
+            format!("{artist_name} and similar artists: {shown}")
+        };
+        let st_id = format!(
+            "artist-{}",
+            artist_key.replace([' ', '.', '&', '/'], "-")
+        );
+        let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
+        let cover = artist_cover.get(artist_key).cloned().unwrap_or_default();
+        let _ = conn.execute(
+            "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                st_id,
+                format!("{artist_name} Radio"),
                 "Artist Stations",
-                format!("Songs by {artist_name}, with a few similar artists from the same style"),
-                serde_json::to_string(&core_ids).unwrap(),
-                serde_json::to_string(&fringe_ids).unwrap(),
+                description,
+                serde_json::to_string(&mix).unwrap(),
+                "[]",
                 cover,
                 is_fav
             ],
         );
         stations_built += 1;
+        log_ha(&format!(
+            "artist station {} own={} similar={}",
+            artist_name,
+            own_ids.len(),
+            added
+        ));
+    }
+
+    log_ha(&format!(
+        "stations={} genre_songs={} indexed={}",
+        stations_built,
+        placed,
+        all_tracks.len()
+    ));
+    if !library_stamp.is_empty() {
+        save_setting(&conn, "library_stamp", &library_stamp);
     }
 
     Ok((all_tracks.len(), stations_built))
+}
+
+async fn newest_library_stamp(state: &AppState) -> Result<String, String> {
+    let cfg = {
+        let conn = state.db.lock().unwrap();
+        load_config(&conn)
+    };
+    if cfg.navidrome_url.is_empty() || cfg.navidrome_user.is_empty() || cfg.navidrome_pass.is_empty() {
+        return Ok(String::new());
+    }
+    let auth = navidrome_login(
+        state,
+        &cfg.navidrome_url,
+        &cfg.navidrome_user,
+        &cfg.navidrome_pass,
+        false,
+    )
+    .await?;
+    let mut params = nd_params(&auth);
+    params.push(("type".into(), "newest".into()));
+    params.push(("size".into(), "40".into()));
+    let json = subsonic_get(state, &cfg.navidrome_url, "getAlbumList2.view", params).await?;
+    Ok(json_items(&json["subsonic-response"]["albumList2"]["album"])
+        .iter()
+        .map(|album| format!("{}:{}", json_str(&album["id"]), json_str(&album["songCount"])))
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
+async fn watch_library(state: AppState) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        if state.scan.lock().unwrap().running {
+            continue;
+        }
+        let current = match newest_library_stamp(&state).await {
+            Ok(stamp) => stamp,
+            Err(err) => {
+                log_ha(&format!("library check failed: {err}"));
+                continue;
+            }
+        };
+        if current.is_empty() {
+            continue;
+        }
+        let previous = {
+            let conn = state.db.lock().unwrap();
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = 'library_stamp'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+        };
+        if previous != current {
+            log_ha("Navidrome library changed. Rebuilding stations.");
+            run_scan(state.clone(), ScanRequest::default()).await;
+        }
+    }
 }
 
 async fn run_scan(state: AppState, req: ScanRequest) {
@@ -2016,7 +2159,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.23 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.24 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2049,6 +2192,10 @@ async fn main() {
     tokio::spawn(async move {
         run_scan(startup_state, ScanRequest::default()).await;
     });
+    let watch_state = admin_state.clone();
+    tokio::spawn(async move {
+        watch_library(watch_state).await;
+    });
 
     let admin_app = build_router(admin_state);
     let public_app = build_router(public_state);
@@ -2059,7 +2206,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.23 listening admin={ingress_port} public={public_port}"
+        "version 0.2.24 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
