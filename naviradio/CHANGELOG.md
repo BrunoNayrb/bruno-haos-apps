@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.21
+
+- Stations are built from ListenBrainz artist styles, not the tags stored in the files. Every song stays with its artist, so nothing is left out.
+- A style with fewer than 100 songs is folded into the nearest style. The result is a handful of stations, not one per artist.
+- An artist station is still created when that artist has at least 20 songs.
+
 ## 0.2.20
 
 - Repeat stays highlighted correctly after a reload. It is on unless you turn it off.

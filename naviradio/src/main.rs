@@ -281,6 +281,109 @@ struct StationBucket {
     style_labels: HashSet<String>,
 }
 
+fn family_label(family: &str) -> String {
+    if family == "mix" {
+        return "Mix".to_string();
+    }
+    STYLES
+        .iter()
+        .find(|style| style.family == family)
+        .map(|style| style.family_label.to_string())
+        .unwrap_or_else(|| "Mix".to_string())
+}
+
+fn family_from_tags(tags: &[(String, u64)]) -> Option<String> {
+    let mut scores: HashMap<&str, u64> = HashMap::new();
+    for (tag, count) in tags {
+        if let Some(style) = classify_style(tag) {
+            *scores.entry(style.family).or_default() += (*count).max(1);
+        }
+    }
+    scores
+        .into_iter()
+        .max_by_key(|(_, score)| *score)
+        .map(|(family, _)| family.to_string())
+}
+
+async fn musicbrainz_artist_mbid(http: &reqwest::Client, name: &str) -> Option<String> {
+    let query_name = name.replace('"', "");
+    for _ in 0..2 {
+        let response = http
+            .get("https://musicbrainz.org/ws/2/artist/")
+            .query(&[
+                ("query", format!("artist:\"{query_name}\"")),
+                ("fmt", "json".to_string()),
+                ("limit", "1".to_string()),
+            ])
+            .send()
+            .await
+            .ok()?;
+        if response.status().as_u16() == 503 || response.status().as_u16() == 429 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        }
+        let json: serde_json::Value = response.json().await.ok()?;
+        let artist = json.get("artists")?.get(0)?;
+        if artist.get("score")?.as_u64().unwrap_or(0) < 80 {
+            return None;
+        }
+        return artist
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(|id| id.to_string());
+    }
+    None
+}
+
+async fn listenbrainz_tag_families(
+    http: &reqwest::Client,
+    mbids: &[String],
+) -> HashMap<String, String> {
+    let mut families = HashMap::new();
+    for chunk in mbids.chunks(40) {
+        let url = format!(
+            "https://api.listenbrainz.org/1/metadata/artist/?inc=tag&artist_mbids={}",
+            chunk.join(",")
+        );
+        let Ok(response) = http.get(&url).send().await else {
+            continue;
+        };
+        let Ok(json) = response.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let Some(artists) = json.as_array() else {
+            continue;
+        };
+        for artist in artists {
+            let Some(mbid) = artist
+                .get("artist_mbid")
+                .and_then(|value| value.as_str())
+                .or_else(|| artist.get("mbid").and_then(|value| value.as_str()))
+            else {
+                continue;
+            };
+            let Some(tags) = artist
+                .pointer("/tag/artist")
+                .and_then(|value| value.as_array())
+            else {
+                continue;
+            };
+            let parsed: Vec<(String, u64)> = tags
+                .iter()
+                .filter_map(|tag| {
+                    let name = tag.get("tag")?.as_str()?.to_string();
+                    let count = tag.get("count").and_then(|value| value.as_u64()).unwrap_or(1);
+                    Some((name, count))
+                })
+                .collect();
+            if let Some(family) = family_from_tags(&parsed) {
+                families.insert(mbid.to_string(), family);
+            }
+        }
+    }
+    families
+}
+
 fn init_db(path: &str) -> Connection {
     let conn = Connection::open(path).expect("Failed to open SQLite DB");
     conn.execute_batch(
@@ -1411,59 +1514,152 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
     }
 
-    let mut unique_artist_ids: HashMap<String, String> = HashMap::new();
-    for t in &all_tracks {
-        if !t.3.is_empty() {
-            unique_artist_ids.entry(t.2.clone()).or_insert_with(|| t.3.clone());
+    let mut artist_nd_ids: HashMap<String, String> = HashMap::new();
+    let mut file_genres: HashMap<String, Vec<String>> = HashMap::new();
+    for track in &all_tracks {
+        let artist_key = track.2.to_lowercase();
+        if !track.3.is_empty() {
+            artist_nd_ids.entry(artist_key.clone()).or_insert_with(|| track.3.clone());
+        }
+        if !track.5.trim().is_empty() {
+            file_genres.entry(artist_key).or_default().push(track.5.clone());
         }
     }
 
+    let mut artist_mbids: HashMap<String, String> = HashMap::new();
     let mut similarity_pairs: Vec<(String, String)> = Vec::new();
-    for (artist_name, artist_id) in unique_artist_ids.iter().take(60) {
+    for (artist_key, artist_id) in &artist_nd_ids {
         let mut params = nd_params(&auth);
         params.push(("id".into(), artist_id.clone()));
-        params.push(("count".into(), "15".into()));
-        if let Ok(json) = subsonic_get(state, &cfg.navidrome_url, "getArtistInfo2.view", params).await {
-                if let Some(sim_arr) =
-                    json["subsonic-response"]["artistInfo2"]["similarArtist"].as_array()
-                {
-                    for sim in sim_arr {
-                        if let Some(sname) = sim["name"].as_str() {
-                            similarity_pairs.push((
-                                artist_name.to_lowercase(),
-                                sname.to_lowercase(),
-                            ));
-                        }
-                    }
+        params.push(("count".into(), "10".into()));
+        let Ok(json) = subsonic_get(state, &cfg.navidrome_url, "getArtistInfo2.view", params).await else {
+            continue;
+        };
+        let info = &json["subsonic-response"]["artistInfo2"];
+        let mbid = json_str(&info["musicBrainzId"]);
+        if !mbid.is_empty() {
+            artist_mbids.insert(artist_key.clone(), mbid);
+        }
+        if let Some(similar) = info["similarArtist"].as_array() {
+            for artist in similar {
+                if let Some(name) = artist["name"].as_str() {
+                    similarity_pairs.push((artist_key.clone(), name.to_lowercase()));
                 }
             }
         }
-
-    let mut by_artist: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, track) in all_tracks.iter().enumerate() {
-        by_artist.entry(track.2.to_lowercase()).or_default().push(index);
     }
-    for indexes in by_artist.values() {
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for index in indexes {
-            let style = &all_tracks[*index].6;
-            if !style.is_empty() {
-                *counts.entry(style.clone()).or_default() += 1;
+
+    let mut missing_names: Vec<String> = file_genres
+        .keys()
+        .filter(|name| !artist_mbids.contains_key(*name))
+        .cloned()
+        .collect();
+    for track in &all_tracks {
+        let artist_key = track.2.to_lowercase();
+        if !artist_mbids.contains_key(&artist_key) && !missing_names.contains(&artist_key) {
+            missing_names.push(artist_key);
+        }
+    }
+    log_ha(&format!(
+        "style lookup: {} artists, {} already have a MusicBrainz id, {} need a search",
+        artist_nd_ids.len().max(file_genres.len()),
+        artist_mbids.len(),
+        missing_names.len()
+    ));
+    for name in &missing_names {
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        if let Some(mbid) = musicbrainz_artist_mbid(&state.http, name).await {
+            artist_mbids.insert(name.clone(), mbid);
+        }
+    }
+
+    let mbids: Vec<String> = artist_mbids.values().cloned().collect::<HashSet<_>>().into_iter().collect();
+    let mbid_families = listenbrainz_tag_families(&state.http, &mbids).await;
+    let mut artist_family: HashMap<String, String> = HashMap::new();
+    let mut from_listenbrainz = 0usize;
+    for (artist_key, mbid) in &artist_mbids {
+        if let Some(family) = mbid_families.get(mbid) {
+            artist_family.insert(artist_key.clone(), family.clone());
+            from_listenbrainz += 1;
+        }
+    }
+
+    let mut from_files = 0usize;
+    for (artist_key, genres) in &file_genres {
+        if artist_family.contains_key(artist_key) {
+            continue;
+        }
+        let tags: Vec<(String, u64)> = genres.iter().map(|genre| (genre.clone(), 1)).collect();
+        if let Some(family) = family_from_tags(&tags) {
+            artist_family.insert(artist_key.clone(), family);
+            from_files += 1;
+        }
+    }
+
+    let mut artist_names: HashSet<String> = HashSet::new();
+    for track in &all_tracks {
+        artist_names.insert(track.2.to_lowercase());
+    }
+    let mut from_similar = 0usize;
+    for _ in 0..3 {
+        let mut found: Vec<(String, String)> = Vec::new();
+        for artist_key in &artist_names {
+            if artist_family.contains_key(artist_key) {
+                continue;
+            }
+            let mut votes: HashMap<String, usize> = HashMap::new();
+            for (left, right) in &similarity_pairs {
+                let other = if left == artist_key {
+                    Some(right)
+                } else if right == artist_key {
+                    Some(left)
+                } else {
+                    None
+                };
+                if let Some(other) = other {
+                    if let Some(family) = artist_family.get(other) {
+                        *votes.entry(family.clone()).or_default() += 1;
+                    }
+                }
+            }
+            if let Some((family, _)) = votes.into_iter().max_by_key(|(_, count)| *count) {
+                found.push((artist_key.clone(), family));
             }
         }
-        let tagged: usize = counts.values().sum();
-        if tagged < 3 {
+        if found.is_empty() {
+            break;
+        }
+        from_similar += found.len();
+        for (artist_key, family) in found {
+            artist_family.insert(artist_key, family);
+        }
+    }
+
+    let fallback_family = artist_family
+        .values()
+        .fold(HashMap::<String, usize>::new(), |mut counts, family| {
+            *counts.entry(family.clone()).or_default() += 1;
+            counts
+        })
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(family, _)| family)
+        .unwrap_or_else(|| "mix".to_string());
+    let mut from_fallback = 0usize;
+    for artist_key in &artist_names {
+        if artist_family.contains_key(artist_key) {
             continue;
         }
-        let Some((best, count)) = counts.iter().max_by_key(|(_, count)| *count) else {
-            continue;
-        };
-        if *count * 5 < tagged * 3 {
-            continue;
-        }
-        let best = best.clone();
-        for index in indexes {
-            all_tracks[*index].6 = best.clone();
+        artist_family.insert(artist_key.clone(), fallback_family.clone());
+        from_fallback += 1;
+    }
+    log_ha(&format!(
+        "styles assigned listenbrainz={from_listenbrainz} file-tags={from_files} similar={from_similar} nearest={from_fallback}"
+    ));
+
+    for track in &mut all_tracks {
+        if let Some(family) = artist_family.get(&track.2.to_lowercase()) {
+            track.6 = family.clone();
         }
     }
 
@@ -1481,14 +1677,6 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
     conn.execute("DELETE FROM stations", []).unwrap();
 
-    for t in &all_tracks {
-        let _ = conn.execute(
-            "INSERT OR REPLACE INTO tracks (id, title, artist, artist_id, album, genre, cluster, duration, cover_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![t.0, t.1, t.2, t.3, t.4, t.5, t.6, t.7, t.8],
-        );
-    }
-
     for (a, b) in &similarity_pairs {
         let _ = conn.execute(
             "INSERT OR IGNORE INTO similar_artists (artist_name, similar_name) VALUES (?1, ?2)",
@@ -1497,44 +1685,30 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
 
     let floor = cfg.min_station_tracks.max(100);
-    let mut style_counts: HashMap<String, usize> = HashMap::new();
-    for track in &all_tracks {
-        if !track.6.is_empty() {
-            *style_counts.entry(track.6.clone()).or_default() += 1;
-        }
-    }
-
     let mut buckets: HashMap<String, StationBucket> = HashMap::new();
     for track in &all_tracks {
-        let Some(style) = style_by_key(&track.6) else {
-            continue;
-        };
-        let own_style = style_counts.get(style.key).copied().unwrap_or(0) >= floor;
-        let key = if own_style {
-            format!("style:{}", style.key)
-        } else {
-            format!("family:{}", style.family)
-        };
+        let family = if track.6.is_empty() { "mix" } else { track.6.as_str() };
+        let key = format!("family:{family}");
         let bucket = buckets.entry(key).or_insert_with(|| StationBucket {
-            label: if own_style {
-                style.label.to_string()
-            } else {
-                style.family_label.to_string()
-            },
-            family: style.family.to_string(),
+            label: family_label(family),
+            family: family.to_string(),
             track_ids: Vec::new(),
             cover: track.8.clone(),
             style_labels: HashSet::new(),
         });
+        if bucket.style_labels.is_empty() {
+            bucket.style_labels.insert(family_label(family));
+        }
         bucket.track_ids.push(track.0.clone());
-        bucket.style_labels.insert(style.label.to_string());
     }
 
     let mut frozen: HashSet<String> = HashSet::new();
     loop {
         let small_key = buckets
             .iter()
-            .filter(|(key, bucket)| bucket.track_ids.len() < floor && !frozen.contains(*key))
+            .filter(|(key, bucket)| {
+                !frozen.contains(*key) && (bucket.track_ids.len() < floor || buckets.len() > 10)
+            })
             .min_by_key(|(_, bucket)| bucket.track_ids.len())
             .map(|(key, _)| key.clone());
         let Some(small_key) = small_key else {
@@ -1568,17 +1742,33 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             }
             cursor = family_neighbor(next_family);
         }
+        if dest_key.is_none() && buckets.len() > 1 {
+            dest_key = buckets
+                .iter()
+                .filter(|(key, _)| *key != &small_key)
+                .max_by_key(|(_, bucket)| bucket.track_ids.len())
+                .map(|(key, _)| key.clone());
+        }
         if let Some(dest_key) = dest_key {
             let Some(small) = buckets.remove(&small_key) else {
                 break;
             };
+            let moved: HashSet<String> = small.track_ids.iter().cloned().collect();
+            let new_family = buckets
+                .get(&dest_key)
+                .map(|bucket| bucket.family.clone())
+                .unwrap_or_default();
             if let Some(dest) = buckets.get_mut(&dest_key) {
                 dest.track_ids.extend(small.track_ids);
                 dest.style_labels.extend(small.style_labels);
-                if dest.style_labels.len() > 1 {
-                    if let Some(style) = STYLES.iter().find(|style| style.family == dest.family) {
-                        dest.label = style.family_label.to_string();
-                    }
+                dest.style_labels.insert(small.label);
+                if let Some(style) = STYLES.iter().find(|style| style.family == dest.family) {
+                    dest.label = style.family_label.to_string();
+                }
+            }
+            for track in &mut all_tracks {
+                if moved.contains(&track.0) {
+                    track.6 = new_family.clone();
                 }
             }
         } else {
@@ -1588,16 +1778,14 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
 
     let mut stations_built = 0;
     let mut placed = 0usize;
+    for track in &all_tracks {
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO tracks (id, title, artist, artist_id, album, genre, cluster, duration, cover_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![track.0, track.1, track.2, track.3, track.4, track.5, track.6, track.7, track.8],
+        );
+    }
     for (key, bucket) in &buckets {
-        if bucket.track_ids.len() < floor {
-            log_ha(&format!(
-                "station skipped {} ({} songs, under {})",
-                bucket.label,
-                bucket.track_ids.len(),
-                floor
-            ));
-            continue;
-        }
         let core_set: HashSet<&String> = bucket.track_ids.iter().collect();
         let mut station_artists: HashSet<String> = HashSet::new();
         for track in &all_tracks {
@@ -1619,9 +1807,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
                 continue;
             }
-            let same_family = style_by_key(&track.6)
-                .map(|style| style.family == bucket.family)
-                .unwrap_or(false);
+            let same_family = track.6 == bucket.family;
             if same_family {
                 fringe_ids.push(track.0.clone());
             }
@@ -1683,17 +1869,13 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let cover = &tracks[0].2;
         let core_ids: Vec<String> = tracks.iter().map(|track| track.0.clone()).collect();
         let core_set: HashSet<&String> = core_ids.iter().collect();
-        let mut style_counts: HashMap<String, usize> = HashMap::new();
-        for track in tracks {
-            if !track.1.is_empty() {
-                *style_counts.entry(track.1.clone()).or_default() += 1;
+        let artist_family = tracks.iter().find_map(|track| {
+            if track.1.is_empty() {
+                None
+            } else {
+                Some(track.1.clone())
             }
-        }
-        let artist_family = style_counts
-            .iter()
-            .max_by_key(|(_, count)| *count)
-            .and_then(|(style, _)| style_by_key(style))
-            .map(|style| style.family.to_string());
+        });
         let mut similar_artists: HashSet<String> = HashSet::new();
         let artist_low = artist_name.to_lowercase();
         for (left, right) in &similarity_pairs {
@@ -1710,9 +1892,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
                     continue;
                 }
-                let same_family = style_by_key(&track.6)
-                    .map(|style| style.family == family)
-                    .unwrap_or(false);
+                let same_family = track.6 == family;
                 if same_family {
                     fringe_ids.push(track.0.clone());
                 }
@@ -1809,6 +1989,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        .user_agent("NaviRadio/0.2.21 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -1842,7 +2023,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.20 listening admin={ingress_port} public={public_port}"
+        "version 0.2.21 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
