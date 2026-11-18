@@ -142,6 +142,7 @@ struct StyleInfo {
     key: &'static str,
     label: &'static str,
     family: &'static str,
+    #[allow(dead_code)]
     family_label: &'static str,
     phrases: &'static [&'static str],
 }
@@ -281,28 +282,35 @@ struct StationBucket {
     style_labels: HashSet<String>,
 }
 
-fn family_label(family: &str) -> String {
-    if family == "mix" {
-        return "Mix".to_string();
-    }
-    STYLES
-        .iter()
-        .find(|style| style.family == family)
-        .map(|style| style.family_label.to_string())
-        .unwrap_or_else(|| "Mix".to_string())
-}
-
 fn family_from_tags(tags: &[(String, u64)]) -> Option<String> {
     let mut scores: HashMap<&str, u64> = HashMap::new();
     for (tag, count) in tags {
         if let Some(style) = classify_style(tag) {
-            *scores.entry(style.family).or_default() += (*count).max(1);
+            *scores.entry(style.key).or_default() += (*count).max(1);
         }
     }
-    scores
-        .into_iter()
-        .max_by_key(|(_, score)| *score)
-        .map(|(family, _)| family.to_string())
+    if scores.is_empty() {
+        return None;
+    }
+    let mut ranked: Vec<(&str, u64)> = scores.into_iter().collect();
+    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    let (best_key, best_score) = ranked[0];
+    let generic = matches!(
+        best_key,
+        "rock" | "pop" | "metal" | "punk" | "electronic" | "hip-hop" | "alternative" | "indie"
+    );
+    if generic {
+        if let Some(best) = style_by_key(best_key) {
+            if let Some((specific, _)) = ranked.iter().skip(1).find(|(key, score)| {
+                *score * 2 >= best_score
+                    && style_by_key(key)
+                        .is_some_and(|style| style.family == best.family && style.key != best.key)
+            }) {
+                return Some((*specific).to_string());
+            }
+        }
+    }
+    Some(best_key.to_string())
 }
 
 async fn musicbrainz_artist_mbid(http: &reqwest::Client, name: &str) -> Option<String> {
@@ -1684,20 +1692,20 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
     }
 
-    let floor = cfg.min_station_tracks.max(100);
     let mut buckets: HashMap<String, StationBucket> = HashMap::new();
     for track in &all_tracks {
-        let family = if track.6.is_empty() { "mix" } else { track.6.as_str() };
-        let key = format!("family:{family}");
+        let style = style_by_key(&track.6);
+        let key = style.map(|item| item.key.to_string()).unwrap_or_else(|| "mix".to_string());
         let bucket = buckets.entry(key).or_insert_with(|| StationBucket {
-            label: family_label(family),
-            family: family.to_string(),
+            label: style.map(|item| item.label.to_string()).unwrap_or_else(|| "Mix".to_string()),
+            family: style.map(|item| item.family.to_string()).unwrap_or_else(|| "mix".to_string()),
             track_ids: Vec::new(),
             cover: track.8.clone(),
             style_labels: HashSet::new(),
         });
         if bucket.style_labels.is_empty() {
-            bucket.style_labels.insert(family_label(family));
+            let label = bucket.label.clone();
+            bucket.style_labels.insert(label);
         }
         bucket.track_ids.push(track.0.clone());
     }
@@ -1706,9 +1714,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     loop {
         let small_key = buckets
             .iter()
-            .filter(|(key, bucket)| {
-                !frozen.contains(*key) && (bucket.track_ids.len() < floor || buckets.len() > 10)
-            })
+            .filter(|(key, bucket)| !frozen.contains(*key) && bucket.track_ids.len() < 25)
             .min_by_key(|(_, bucket)| bucket.track_ids.len())
             .map(|(key, _)| key.clone());
         let Some(small_key) = small_key else {
@@ -1718,57 +1724,35 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let Some(family) = family else {
             break;
         };
-        let mut dest_key = None;
-        let mut cursor = family_neighbor(&family);
-        let mut hops = 0;
-        while let Some(next_family) = cursor {
-            if hops > 5 {
-                break;
+        let small_len = buckets.get(&small_key).map(|bucket| bucket.track_ids.len()).unwrap_or(0);
+        let mut dest_key = buckets
+            .iter()
+            .filter(|(key, bucket)| *key != &small_key && bucket.family == family)
+            .max_by_key(|(_, bucket)| bucket.track_ids.len())
+            .map(|(key, _)| key.clone());
+        if dest_key.is_none() && small_len < 15 {
+            if let Some(neighbor) = family_neighbor(&family) {
+                dest_key = buckets
+                    .iter()
+                    .filter(|(_, bucket)| bucket.family == neighbor)
+                    .max_by_key(|(_, bucket)| bucket.track_ids.len())
+                    .map(|(key, _)| key.clone());
             }
-            hops += 1;
-            let mut best: Option<(usize, String)> = None;
-            for (key, bucket) in &buckets {
-                if key == &small_key || bucket.family != next_family {
-                    continue;
-                }
-                let len = bucket.track_ids.len();
-                if best.as_ref().map(|(count, _)| len > *count).unwrap_or(true) {
-                    best = Some((len, key.clone()));
-                }
-            }
-            if let Some((_, key)) = best {
-                dest_key = Some(key);
-                break;
-            }
-            cursor = family_neighbor(next_family);
-        }
-        if dest_key.is_none() && buckets.len() > 1 {
-            dest_key = buckets
-                .iter()
-                .filter(|(key, _)| *key != &small_key)
-                .max_by_key(|(_, bucket)| bucket.track_ids.len())
-                .map(|(key, _)| key.clone());
         }
         if let Some(dest_key) = dest_key {
             let Some(small) = buckets.remove(&small_key) else {
                 break;
             };
             let moved: HashSet<String> = small.track_ids.iter().cloned().collect();
-            let new_family = buckets
-                .get(&dest_key)
-                .map(|bucket| bucket.family.clone())
-                .unwrap_or_default();
+            let new_style = dest_key.clone();
             if let Some(dest) = buckets.get_mut(&dest_key) {
                 dest.track_ids.extend(small.track_ids);
                 dest.style_labels.extend(small.style_labels);
                 dest.style_labels.insert(small.label);
-                if let Some(style) = STYLES.iter().find(|style| style.family == dest.family) {
-                    dest.label = style.family_label.to_string();
-                }
             }
             for track in &mut all_tracks {
                 if moved.contains(&track.0) {
-                    track.6 = new_family.clone();
+                    track.6 = new_style.clone();
                 }
             }
         } else {
@@ -1807,7 +1791,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
                 continue;
             }
-            let same_family = track.6 == bucket.family;
+            let same_family = style_by_key(&track.6)
+                .map(|style| style.family == bucket.family)
+                .unwrap_or(false);
             if same_family {
                 fringe_ids.push(track.0.clone());
             }
@@ -1870,11 +1856,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let core_ids: Vec<String> = tracks.iter().map(|track| track.0.clone()).collect();
         let core_set: HashSet<&String> = core_ids.iter().collect();
         let artist_family = tracks.iter().find_map(|track| {
-            if track.1.is_empty() {
-                None
-            } else {
-                Some(track.1.clone())
-            }
+            style_by_key(&track.1).map(|style| style.family.to_string())
         });
         let mut similar_artists: HashSet<String> = HashSet::new();
         let artist_low = artist_name.to_lowercase();
@@ -1892,7 +1874,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 if core_set.contains(&track.0) || !similar_artists.contains(&track.2.to_lowercase()) {
                     continue;
                 }
-                let same_family = track.6 == family;
+                let same_family = style_by_key(&track.6)
+                    .map(|style| style.family == family)
+                    .unwrap_or(false);
                 if same_family {
                     fringe_ids.push(track.0.clone());
                 }
@@ -2023,7 +2007,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.21 listening admin={ingress_port} public={public_port}"
+        "version 0.2.22 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

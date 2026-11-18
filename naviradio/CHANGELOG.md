@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.22
+
+- Style stations stay separate. Alternative Rock, Metal, Punk, and the rest are no longer folded into one Rock station.
+- A style is merged only when it has fewer than 25 songs, and only into a station of the same style. Anything under 15 songs can fold one step into a neighbor. Songs are still all included.
+
 ## 0.2.21
 
 - Stations are built from ListenBrainz artist styles, not the tags stored in the files. Every song stays with its artist, so nothing is left out.
