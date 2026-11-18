@@ -1924,51 +1924,84 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         artist_display.entry(key.clone()).or_insert_with(|| track.2.clone());
         artist_cover.entry(key).or_insert_with(|| track.8.clone());
     }
-    for (artist_key, own_ids) in &by_artist {
-        if own_ids.len() < 20 {
-            continue;
-        }
-        let mut mix = own_ids.clone();
-        let mut heard: Vec<String> = Vec::new();
-        let mut used = HashSet::new();
-        let mut added = 0usize;
-        for (left, right) in &similarity_pairs {
-            if left != artist_key || !used.insert(right.clone()) {
-                continue;
+    let mut similar_to: HashMap<String, Vec<String>> = HashMap::new();
+    for (left, right) in &similarity_pairs {
+        if by_artist.contains_key(left) && by_artist.contains_key(right) && left != right {
+            let list = similar_to.entry(left.clone()).or_default();
+            if !list.contains(right) {
+                list.push(right.clone());
             }
-            let Some(other_ids) = by_artist.get(right) else {
+            let back = similar_to.entry(right.clone()).or_default();
+            if !back.contains(left) {
+                back.push(left.clone());
+            }
+        }
+    }
+    let mut seeds: Vec<String> = by_artist
+        .iter()
+        .filter(|(_, ids)| ids.len() >= 8)
+        .map(|(name, _)| name.clone())
+        .collect();
+    seeds.sort_by(|a, b| {
+        by_artist
+            .get(b)
+            .map(|ids| ids.len())
+            .unwrap_or(0)
+            .cmp(&by_artist.get(a).map(|ids| ids.len()).unwrap_or(0))
+    });
+    let mut covered: HashSet<String> = HashSet::new();
+    for artist_key in seeds {
+        let mut members = vec![artist_key.clone()];
+        if let Some(others) = similar_to.get(&artist_key) {
+            members.extend(others.iter().cloned());
+        }
+        let mut mix: Vec<String> = Vec::new();
+        let mut heard: Vec<String> = Vec::new();
+        for member in &members {
+            let Some(ids) = by_artist.get(member) else {
                 continue;
             };
-            if other_ids.is_empty() {
-                continue;
-            }
-            if let Some(name) = artist_display.get(right) {
-                heard.push(name.clone());
-            }
-            for id in other_ids {
-                if added >= own_ids.len() {
-                    break;
+            if member != &artist_key {
+                if let Some(name) = artist_display.get(member) {
+                    heard.push(name.clone());
                 }
-                mix.push(id.clone());
-                added += 1;
             }
-            if added >= own_ids.len() {
-                break;
-            }
+            mix.extend(ids.iter().cloned());
         }
-        let artist_name = artist_display.get(artist_key).map(|name| name.as_str()).unwrap_or(artist_key);
+        mix.sort();
+        mix.dedup();
+        let artist_name = artist_display
+            .get(&artist_key)
+            .map(|name| name.as_str())
+            .unwrap_or(artist_key.as_str());
+        if mix.len() < 100 {
+            log_ha(&format!(
+                "artist station skipped {} ({} songs, need 100)",
+                artist_name,
+                mix.len()
+            ));
+            continue;
+        }
+        let already = mix.iter().filter(|id| covered.contains(*id)).count();
+        if already * 2 >= mix.len() {
+            log_ha(&format!(
+                "artist station skipped {} because that sound is already covered",
+                artist_name
+            ));
+            continue;
+        }
+        for id in &mix {
+            covered.insert(id.clone());
+        }
         let description = if heard.is_empty() {
             format!("Songs by {artist_name}")
         } else {
             let shown = heard.iter().take(4).cloned().collect::<Vec<_>>().join(", ");
             format!("{artist_name} and similar artists: {shown}")
         };
-        let st_id = format!(
-            "artist-{}",
-            artist_key.replace([' ', '.', '&', '/'], "-")
-        );
+        let st_id = format!("artist-{}", artist_key.replace([' ', '.', '&', '/'], "-"));
         let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
-        let cover = artist_cover.get(artist_key).cloned().unwrap_or_default();
+        let cover = artist_cover.get(&artist_key).cloned().unwrap_or_default();
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -1985,10 +2018,10 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
         stations_built += 1;
         log_ha(&format!(
-            "artist station {} own={} similar={}",
+            "artist station {} songs={} similar_artists={}",
             artist_name,
-            own_ids.len(),
-            added
+            mix.len(),
+            heard.len()
         ));
     }
 
@@ -2206,7 +2239,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.24 listening admin={ingress_port} public={public_port}"
+        "version 0.2.25 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

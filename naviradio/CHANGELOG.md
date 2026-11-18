@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.25
+
+- Artist stations are built around major artists and the artists that sound like them. A station is created only when that group has at least 100 songs. A second station is not created when it would be the same songs again.
+- Adding enough music later creates the station on the next library check. No manual rescan is required.
+
 ## 0.2.24
 
 - Genre stations use broad styles. Hip-Hop and Rap are one station. Alternative stays Alternative instead of collecting every nearby style.
