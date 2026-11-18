@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.27
+
+- A song keeps the genre on the file. ListenBrainz is used only when that tag is blank or junk.
+- Decade stations are created at 25 songs, so slices like 2000s Rock, 2010s Rock, and 2010s Hip-Hop can appear.
+- An artist station is created at 60 songs. If the similar artists are not in the library, the station fills up with other songs from that same sound. A second station is still skipped when it would repeat one that already exists.
+
 ## 0.2.26
 
 - Americana and indie folk are no longer treated as country. Bands like The Lumineers go to Alternative.
