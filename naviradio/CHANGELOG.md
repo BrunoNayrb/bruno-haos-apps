@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.26
+
+- Americana and indie folk are no longer treated as country. Bands like The Lumineers go to Alternative.
+
 ## 0.2.25
 
 - Artist stations are built around major artists and the artists that sound like them. A station is created only when that group has at least 100 songs. A second station is not created when it would be the same songs again.

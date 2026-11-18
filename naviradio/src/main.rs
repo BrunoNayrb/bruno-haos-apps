@@ -161,7 +161,7 @@ const STYLES: &[StyleInfo] = &[
     StyleInfo { key: "emo", label: "Emo", family: "punk", family_label: "Punk", phrases: &["emo"] },
     StyleInfo { key: "hardcore", label: "Hardcore", family: "punk", family_label: "Punk", phrases: &["post hardcore", "hardcore"] },
     StyleInfo { key: "punk", label: "Punk", family: "punk", family_label: "Punk", phrases: &["ska punk", "punk"] },
-    StyleInfo { key: "indie-rock", label: "Indie Rock", family: "rock", family_label: "Rock", phrases: &["indie rock"] },
+    StyleInfo { key: "indie-rock", label: "Indie Rock", family: "rock", family_label: "Rock", phrases: &["indie folk", "indie rock"] },
     StyleInfo { key: "alt-rock", label: "Alternative Rock", family: "rock", family_label: "Rock", phrases: &["alternative rock", "alt rock"] },
     StyleInfo { key: "classic-rock", label: "Classic Rock", family: "rock", family_label: "Rock", phrases: &["classic rock"] },
     StyleInfo { key: "hard-rock", label: "Hard Rock", family: "rock", family_label: "Rock", phrases: &["hard rock"] },
@@ -188,7 +188,7 @@ const STYLES: &[StyleInfo] = &[
     StyleInfo { key: "rap", label: "Rap", family: "hiphop", family_label: "Hip-Hop & Rap", phrases: &["g funk", "boom bap", "trap", "rap"] },
     StyleInfo { key: "shoegaze", label: "Shoegaze", family: "alternative", family_label: "Alternative & Indie", phrases: &["shoegaze", "dream pop"] },
     StyleInfo { key: "indie", label: "Indie", family: "alternative", family_label: "Alternative & Indie", phrases: &["indie"] },
-    StyleInfo { key: "alternative", label: "Alternative", family: "alternative", family_label: "Alternative & Indie", phrases: &["alternative", "alt"] },
+    StyleInfo { key: "alternative", label: "Alternative", family: "alternative", family_label: "Alternative & Indie", phrases: &["stomp and holler", "americana", "alternative", "alt"] },
     StyleInfo { key: "electropop", label: "Electropop", family: "pop", family_label: "Pop", phrases: &["electro pop", "electropop", "synth pop", "synthpop", "dance pop"] },
     StyleInfo { key: "kpop", label: "K-Pop", family: "pop", family_label: "Pop", phrases: &["k pop", "kpop"] },
     StyleInfo { key: "pop", label: "Pop", family: "pop", family_label: "Pop", phrases: &["pop"] },
@@ -202,7 +202,7 @@ const STYLES: &[StyleInfo] = &[
     StyleInfo { key: "rnb", label: "R&B", family: "soul", family_label: "Soul & R&B", phrases: &["rhythm and blues", "r&b", "rnb"] },
     StyleInfo { key: "funk", label: "Funk", family: "soul", family_label: "Soul & R&B", phrases: &["funk"] },
     StyleInfo { key: "soul", label: "Soul", family: "soul", family_label: "Soul & R&B", phrases: &["neo soul", "motown", "soul"] },
-    StyleInfo { key: "country", label: "Country", family: "country", family_label: "Country", phrases: &["outlaw country", "bluegrass", "americana", "country"] },
+    StyleInfo { key: "country", label: "Country", family: "country", family_label: "Country", phrases: &["outlaw country", "bluegrass", "country"] },
     StyleInfo { key: "folk", label: "Folk", family: "folk", family_label: "Folk", phrases: &["singer songwriter", "folk"] },
     StyleInfo { key: "blues", label: "Blues", family: "blues", family_label: "Blues", phrases: &["blues"] },
     StyleInfo { key: "jazz", label: "Jazz", family: "jazz", family_label: "Jazz", phrases: &["jazz fusion", "bebop", "jazz"] },
@@ -286,9 +286,8 @@ fn broad_neighbor(style: &str) -> Option<&'static str> {
 fn broad_style(style_key: &str) -> (&'static str, &'static str) {
     match style_key {
         "hip-hop" | "rap" => ("hiphop", "Hip-Hop"),
-        "alt-rock" | "indie-rock" | "indie" | "alternative" | "shoegaze" | "britpop" | "grunge" => {
-            ("alternative", "Alternative")
-        }
+        "alt-rock" | "indie-rock" | "indie" | "alternative" | "shoegaze" | "britpop" | "grunge"
+        | "folk-rock" => ("alternative", "Alternative"),
         "pop-punk" | "emo" | "hardcore" | "punk" => ("punk", "Punk"),
         "heavy-metal" | "death-metal" | "black-metal" | "thrash" | "doom" | "metalcore"
         | "nu-metal" | "industrial" | "metal" => ("metal", "Metal"),
@@ -298,7 +297,7 @@ fn broad_style(style_key: &str) -> (&'static str, &'static str) {
         }
         "rnb" | "funk" | "soul" => ("soul", "Soul & R&B"),
         "country" => ("country", "Country"),
-        "folk" | "folk-rock" => ("folk", "Folk"),
+        "folk" => ("folk", "Folk"),
         "blues" => ("blues", "Blues"),
         "jazz" => ("jazz", "Jazz"),
         "reggae" => ("reggae", "Reggae"),
@@ -2239,7 +2238,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.25 listening admin={ingress_port} public={public_port}"
+        "version 0.2.26 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
