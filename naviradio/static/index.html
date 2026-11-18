@@ -682,7 +682,7 @@
         <button class="now-play" id="nowPlay" title="Play"></button>
         <button class="now-icon" id="nowNext" title="Next"></button>
         <button class="now-icon" id="nowShuffle" title="Shuffle"></button>
-        <button class="now-icon" id="nowRepeat" title="Repeat station"></button>
+        <button class="now-icon on" id="nowRepeat" title="Repeat station"></button>
       </div>
       <div class="now-volume-group">
         <button class="now-icon" id="nowMute" title="Mute"></button>
@@ -783,6 +783,7 @@
     audio.addEventListener('pause', syncPlayIcon);
     audio.addEventListener('timeupdate', updateProgress);
     applyVolume();
+    syncRepeatIcon();
 
     function paintVolume(slider) {
       const value = Number(slider.value);

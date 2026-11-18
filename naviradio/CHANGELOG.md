@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.20
+
+- Repeat stays highlighted correctly after a reload. It is on unless you turn it off.
+
 ## 0.2.19
 
 - Repeat is on the player, after shuffle. On, the station starts again when it reaches the end. With shuffle on, it reshuffles. Off, playback stops at the last song.
