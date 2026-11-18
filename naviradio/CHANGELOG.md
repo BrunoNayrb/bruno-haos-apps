@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.18
+
+- Genre stations need at least 100 songs. A style that is smaller rolls into the nearest related family instead of becoming its own short station.
+- A station no longer pulls in an unrelated genre because two artists were marked similar. Extra songs stay in the same family, and they are capped.
+- Artist stations are created only when that artist has at least 20 songs. The extras are similar artists from the same style, not the whole genre.
+- The add-on configuration no longer ships with a Navidrome address or username. Those fields start blank.
+
 ## 0.2.17
 
 - Stop and previous swapped places. Stop is now to the left of previous.
@@ -67,7 +74,7 @@
 
 ## 0.2.6
 
-- The default Navidrome username is `badlonegamer`. The previous default, `badonegamer`, is not an account on the server.
+- Navidrome login errors now name the account that was rejected, without writing the password.
 
 ## 0.2.5
 
