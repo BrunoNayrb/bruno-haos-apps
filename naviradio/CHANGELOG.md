@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.23
+
+- The admin scan line updates when the scan finishes. It says how many tracks were indexed and how many stations were created, instead of staying on "scanning the library."
+
 ## 0.2.22
 
 - Style stations stay separate. Alternative Rock, Metal, Punk, and the rest are no longer folded into one Rock station.

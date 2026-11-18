@@ -843,6 +843,7 @@
         document.getElementById('toggleAdminBtn').classList.remove('hidden');
         document.getElementById('appShell').classList.add('visible');
         await loadAdminConfig();
+        pollScan();
         await loadStations();
         if (ctx.station_count === 0) {
           document.getElementById('adminView').classList.remove('hidden');
@@ -888,7 +889,9 @@
     }
 
     function toggleAdminView() {
-      document.getElementById('adminView').classList.toggle('hidden');
+      const view = document.getElementById('adminView');
+      view.classList.toggle('hidden');
+      if (!view.classList.contains('hidden')) pollScan();
     }
 
     function stationGroup(st) {
@@ -1548,9 +1551,41 @@
       await loadAdminConfig();
     }
 
+    let scanWatch = false;
+
+    async function pollScan() {
+      try {
+        const res = await fetch('api/admin/scan-status');
+        const data = await res.json();
+        if (data.message) {
+          document.getElementById('scanStatus').textContent = data.message;
+        }
+        const btn = document.getElementById('rescanBtn');
+        if (data.running) {
+          btn.disabled = true;
+          setTimeout(pollScan, 2000);
+          return;
+        }
+        btn.disabled = false;
+        if (scanWatch) {
+          scanWatch = false;
+          if (!data.error && data.tracks_indexed) {
+            document.getElementById('cfgPass').value = '';
+            await loadStations();
+            await loadAdminConfig();
+          }
+        }
+        return;
+      } catch (err) {
+        document.getElementById('rescanBtn').disabled = false;
+        document.getElementById('scanStatus').textContent = 'Lost contact with the scan. Refresh the page.';
+      }
+    }
+
     async function triggerRescan() {
       const btn = document.getElementById('rescanBtn');
       btn.disabled = true;
+      scanWatch = true;
       document.getElementById('scanStatus').textContent = 'Checking the Navidrome login and scanning the library...';
       const selected_folders = Array.from(document.querySelectorAll('.folder-cb:checked')).map(cb => cb.value);
       const res = await fetch('api/admin/rescan', {
@@ -1563,17 +1598,13 @@
           selected_folders
         })
       });
-      const data = await res.json();
-      btn.disabled = false;
-      if (res.ok) {
-        document.getElementById('cfgPass').value = '';
-        document.getElementById('scanStatus').textContent =
-          `Indexed ${data.tracks_indexed} tracks and built ${data.stations_created} dynamic stations.`;
-        await loadStations();
-        await loadAdminConfig();
-      } else {
+      if (!res.ok) {
+        btn.disabled = false;
+        const data = await res.json().catch(() => ({}));
         document.getElementById('scanStatus').textContent = 'Error: ' + (data.message || 'Scan failed');
+        return;
       }
+      pollScan();
     }
 
     async function addLocalUser() {

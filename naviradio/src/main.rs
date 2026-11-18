@@ -27,6 +27,15 @@ struct AppState {
     is_admin_port: bool,
     static_dir: String,
     logins: Arc<Mutex<HashMap<String, LoginStrike>>>,
+    scan: Arc<Mutex<ScanStatus>>,
+}
+
+struct ScanStatus {
+    running: bool,
+    message: String,
+    tracks: usize,
+    stations: usize,
+    error: String,
 }
 
 struct LoginStrike {
@@ -1912,23 +1921,56 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     Ok((all_tracks.len(), stations_built))
 }
 
+async fn run_scan(state: AppState, req: ScanRequest) {
+    {
+        let mut job = state.scan.lock().unwrap();
+        if job.running {
+            return;
+        }
+        job.running = true;
+        job.error.clear();
+        job.message = "Checking the Navidrome login and scanning the library...".to_string();
+    }
+    let result = perform_scan_and_build(&state, &req).await;
+    let mut job = state.scan.lock().unwrap();
+    job.running = false;
+    match result {
+        Ok((tracks, stations)) => {
+            job.tracks = tracks;
+            job.stations = stations;
+            job.message = format!(
+                "Scan finished. {tracks} tracks indexed and {stations} stations created."
+            );
+        }
+        Err(err) => {
+            job.error = err.clone();
+            job.message = format!("Error: {err}");
+        }
+    }
+}
+
 async fn admin_rescan(
     State(state): State<AppState>,
     Json(req): Json<ScanRequest>,
 ) -> impl IntoResponse {
-    match perform_scan_and_build(&state, &req).await {
-        Ok((tracks, stations)) => Json(serde_json::json!({
-            "status": "ok",
-            "tracks_indexed": tracks,
-            "stations_created": stations
-        }))
-        .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "status": "error", "message": e })),
-        )
-            .into_response(),
+    if state.scan.lock().unwrap().running {
+        return Json(serde_json::json!({ "status": "running" })).into_response();
     }
+    tokio::spawn(async move {
+        run_scan(state, req).await;
+    });
+    Json(serde_json::json!({ "status": "started" })).into_response()
+}
+
+async fn admin_scan_status(State(state): State<AppState>) -> impl IntoResponse {
+    let job = state.scan.lock().unwrap();
+    Json(serde_json::json!({
+        "running": job.running,
+        "message": job.message,
+        "tracks_indexed": job.tracks,
+        "stations_created": job.stations,
+        "error": job.error,
+    }))
 }
 
 fn build_router(state: AppState) -> Router {
@@ -1948,6 +1990,7 @@ fn build_router(state: AppState) -> Router {
         r = r
             .route("/api/admin/config", get(admin_get_config).post(admin_save_config))
             .route("/api/admin/rescan", post(admin_rescan))
+            .route("/api/admin/scan-status", get(admin_scan_status))
             .route("/api/admin/users", post(admin_add_user))
             .route("/api/admin/users/:username", delete(admin_del_user));
     }
@@ -1973,16 +2016,24 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.21 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.23 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
+    let scan = Arc::new(Mutex::new(ScanStatus {
+        running: false,
+        message: String::new(),
+        tracks: 0,
+        stations: 0,
+        error: String::new(),
+    }));
     let admin_state = AppState {
         db: db.clone(),
         http: http.clone(),
         is_admin_port: true,
         static_dir: static_dir.clone(),
         logins: logins.clone(),
+        scan: scan.clone(),
     };
 
     let public_state = AppState {
@@ -1991,11 +2042,12 @@ async fn main() {
         is_admin_port: false,
         static_dir,
         logins,
+        scan,
     };
 
     let startup_state = admin_state.clone();
     tokio::spawn(async move {
-        let _ = perform_scan_and_build(&startup_state, &ScanRequest::default()).await;
+        run_scan(startup_state, ScanRequest::default()).await;
     });
 
     let admin_app = build_router(admin_state);
@@ -2007,7 +2059,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.22 listening admin={ingress_port} public={public_port}"
+        "version 0.2.23 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
