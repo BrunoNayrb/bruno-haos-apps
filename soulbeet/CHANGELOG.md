@@ -6,5 +6,3 @@
 - Runs the official Soulbeet app.
 - Beets databases are stored on the Home Assistant disk under `/data/beets_dbs/`.
 - Host port 9765.
-
-Older notes stayed in https://github.com/BrunoNayrb/ha-soulbeet.

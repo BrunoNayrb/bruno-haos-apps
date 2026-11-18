@@ -24,9 +24,8 @@ Changes are listed in each add-on's `CHANGELOG.md`. That is the file Home Assist
 
 ## After you switch
 
-If Home Assistant still has the old repository URLs, remove them so you are not loading the same add-on twice:
+If Home Assistant still has the old add-on repository, remove it so you are not loading the same add-on twice:
 
-- `https://github.com/BrunoNayrb/ha-naviradio`
 - `https://github.com/BrunoNayrb/ha-soulbeet`
 
 Already installed add-ons keep running. Their images did not change.
