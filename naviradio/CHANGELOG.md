@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.19
+
+- Repeat is on the player, after shuffle. On, the station starts again when it reaches the end. With shuffle on, it reshuffles. Off, playback stops at the last song.
+
 ## 0.2.18
 
 - Genre stations need at least 100 songs. A style that is smaller rolls into the nearest related family instead of becoming its own short station.

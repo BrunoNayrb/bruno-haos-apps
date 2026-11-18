@@ -649,6 +649,7 @@
         <button class="play-btn" id="playPauseBtn" title="Play"></button>
         <button class="icon-btn" id="nextBtn" title="Next"></button>
         <button class="icon-btn on" id="shuffleBtn" title="Shuffle"></button>
+        <button class="icon-btn on" id="repeatBtn" title="Repeat station"></button>
       </div>
       <div class="volume-group">
         <button class="icon-btn" id="muteBtn" title="Mute"></button>
@@ -681,6 +682,7 @@
         <button class="now-play" id="nowPlay" title="Play"></button>
         <button class="now-icon" id="nowNext" title="Next"></button>
         <button class="now-icon" id="nowShuffle" title="Shuffle"></button>
+        <button class="now-icon" id="nowRepeat" title="Repeat station"></button>
       </div>
       <div class="now-volume-group">
         <button class="now-icon" id="nowMute" title="Mute"></button>
@@ -709,6 +711,7 @@
     let recentTracks = [];
     let queueOpen = false;
     let shuffleOn = true;
+    let repeatOn = localStorage.getItem('naviradio_repeat') !== '0';
     let savedVolume = Number(localStorage.getItem('naviradio_volume'));
     if (!Number.isFinite(savedVolume)) savedVolume = 80;
     let muted = localStorage.getItem('naviradio_muted') === '1';
@@ -721,6 +724,7 @@
     const svgStop = '<svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M6 6h12v12H6z"/></svg>';
     const svgList = '<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>';
     const svgShuffle = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>';
+    const svgRepeat = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>';
     const svgVol = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 9h3.2L12 5.2v13.6L7.2 15H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M16 9.2a3.6 3.6 0 0 1 0 5.6M18.4 6.6a7 7 0 0 1 0 10.8"/></svg>';
     const svgVolMute = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 9h3.2L12 5.2v13.6L7.2 15H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M16 9.5l5 5M21 9.5l-5 5"/></svg>';
     const svgDown = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -737,6 +741,7 @@
     document.getElementById('stopBtn').innerHTML = svgStop;
     document.getElementById('nextBtn').innerHTML = svgNext;
     document.getElementById('shuffleBtn').innerHTML = svgShuffle;
+    document.getElementById('repeatBtn').innerHTML = svgRepeat;
     document.getElementById('muteBtn').innerHTML = svgVol;
     document.getElementById('queueBtn').innerHTML = svgList;
     document.getElementById('playPauseBtn').innerHTML = svgPlay;
@@ -745,12 +750,14 @@
     document.getElementById('stopBtn').onclick = stopPlayback;
     document.getElementById('nextBtn').onclick = () => playNext();
     document.getElementById('shuffleBtn').onclick = toggleShuffle;
+    document.getElementById('repeatBtn').onclick = toggleRepeat;
     document.getElementById('muteBtn').onclick = toggleMute;
     document.getElementById('nowClose').innerHTML = svgDown;
     document.getElementById('nowPrev').innerHTML = svgPrev;
     document.getElementById('nowStop').innerHTML = svgStop;
     document.getElementById('nowNext').innerHTML = svgNext;
     document.getElementById('nowShuffle').innerHTML = svgShuffle;
+    document.getElementById('nowRepeat').innerHTML = svgRepeat;
     document.getElementById('nowMute').innerHTML = svgVol;
     document.getElementById('nowPlay').innerHTML = svgPlay;
     document.getElementById('nowClose').onclick = closeNowPlaying;
@@ -758,6 +765,7 @@
     document.getElementById('nowStop').onclick = stopPlayback;
     document.getElementById('nowNext').onclick = () => playNext();
     document.getElementById('nowShuffle').onclick = toggleShuffle;
+    document.getElementById('nowRepeat').onclick = toggleRepeat;
     document.getElementById('nowMute').onclick = toggleMute;
     document.getElementById('nowPlay').onclick = togglePlay;
     document.getElementById('nowVolume').oninput = (event) => setVolume(event.target.value);
@@ -1146,6 +1154,17 @@
       document.getElementById('nowShuffle').classList.toggle('on', shuffleOn);
     }
 
+    function syncRepeatIcon() {
+      document.getElementById('repeatBtn').classList.toggle('on', repeatOn);
+      document.getElementById('nowRepeat').classList.toggle('on', repeatOn);
+    }
+
+    function toggleRepeat() {
+      repeatOn = !repeatOn;
+      localStorage.setItem('naviradio_repeat', repeatOn ? '1' : '0');
+      syncRepeatIcon();
+    }
+
     function toggleShuffle() {
       shuffleOn = !shuffleOn;
       syncShuffleIcon();
@@ -1421,8 +1440,11 @@
     }
 
     async function playNext() {
-      if (!queue.length && stationTracks.length) {
-        queue = shuffleOn ? mixTracks(stationTracks.filter(t => !current || t.id !== current.id)) : [];
+      if (!queue.length && repeatOn && stationTracks.length) {
+        queue = shuffleOn
+          ? mixTracks(stationTracks.filter(track => !current || track.id !== current.id))
+          : stationTracks.slice();
+        if (!queue.length) queue = stationTracks.slice();
       }
       const next = queue.shift();
       if (!next) return;
