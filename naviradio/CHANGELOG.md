@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.32
+
+- A Left Out station lists every song the scan did not put in a sound cluster. The add-on log names the artists with the most leftover songs.
+
 ## 0.2.31
 
 - Clustering no longer collapses the library into a few giant stations. Groups are split by who is actually similar, and a broad listener tag cannot glue unrelated artists together.

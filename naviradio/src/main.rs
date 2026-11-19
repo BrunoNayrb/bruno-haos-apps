@@ -2043,6 +2043,55 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         ));
     }
 
+    let mut left_out: Vec<String> = Vec::new();
+    let mut left_artists: HashMap<String, usize> = HashMap::new();
+    for track in &all_tracks {
+        if cluster_of_track.contains_key(&track.0) {
+            continue;
+        }
+        left_out.push(track.0.clone());
+        *left_artists.entry(track.2.clone()).or_default() += 1;
+    }
+    if !left_out.is_empty() {
+        let mut artists: Vec<(String, usize)> = left_artists.into_iter().collect();
+        artists.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        let shown = artists
+            .iter()
+            .take(12)
+            .map(|(name, count)| format!("{name} ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        log_ha(&format!(
+            "not in a station: {} songs, {} artists. largest: {shown}",
+            left_out.len(),
+            artists.len()
+        ));
+        let cover = all_tracks
+            .iter()
+            .find(|track| left_out.iter().any(|id| id == &track.0))
+            .map(|track| track.8.clone())
+            .unwrap_or_default();
+        let is_fav = if existing_favorites.contains("unsorted") { 1 } else { 0 };
+        let _ = conn.execute(
+            "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                "unsorted",
+                "Not in a Station",
+                "Unsorted",
+                format!(
+                    "{} songs the scan could not group with similar artists",
+                    left_out.len()
+                ),
+                serde_json::to_string(&left_out).unwrap(),
+                "[]",
+                cover,
+                is_fav
+            ],
+        );
+        stations_built += 1;
+    }
+
     let mut decade_buckets: HashMap<String, StationBucket> = HashMap::new();
     for track in &all_tracks {
         let Some(year) = track_years.get(&track.0).copied() else {
@@ -2428,7 +2477,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.31 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.32 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2475,7 +2524,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.31 listening admin={ingress_port} public={public_port}"
+        "version 0.2.32 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
