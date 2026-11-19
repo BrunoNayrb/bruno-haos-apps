@@ -56,10 +56,10 @@ jobs:
           context: naviradio
           image: ${{ matrix.image }}
           image-tags: |
-            0.2.30
+            0.2.31
             latest
           push: true
-          version: "0.2.30"
+          version: "0.2.31"
 
   manifest:
     name: Publish multi-arch manifest
@@ -76,6 +76,6 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: |
-            0.2.30
+            0.2.31
             latest
           registry-prefix: ${{ env.REGISTRY_PREFIX }}

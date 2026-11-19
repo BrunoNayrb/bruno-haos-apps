@@ -253,6 +253,176 @@ fn fnv_id(text: &str) -> String {
     format!("cluster-{hash:x}")
 }
 
+fn song_count(members: &[String], tracks_by_artist: &HashMap<String, Vec<String>>) -> usize {
+    members
+        .iter()
+        .map(|artist| tracks_by_artist.get(artist).map(|ids| ids.len()).unwrap_or(0))
+        .sum()
+}
+
+fn louvain_communities(
+    nodes: &[String],
+    neighbors: &HashMap<String, Vec<(String, f64)>>,
+    gamma: f64,
+) -> Vec<Vec<String>> {
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let node_set: HashSet<&str> = nodes.iter().map(|name| name.as_str()).collect();
+    let mut local: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+    let mut degree: HashMap<String, f64> = HashMap::new();
+    let mut two_m = 0.0;
+    for node in nodes {
+        let mut links = Vec::new();
+        if let Some(all) = neighbors.get(node) {
+            for (other, weight) in all {
+                if other != node && *weight > 0.0 && node_set.contains(other.as_str()) {
+                    links.push((other.clone(), *weight));
+                    *degree.entry(node.clone()).or_default() += *weight;
+                    two_m += *weight;
+                }
+            }
+        }
+        local.insert(node.clone(), links);
+        degree.entry(node.clone()).or_default();
+    }
+    if two_m <= 0.0 {
+        return nodes.iter().cloned().map(|name| vec![name]).collect();
+    }
+    let mut comm: HashMap<String, usize> = HashMap::new();
+    let mut comm_tot: HashMap<usize, f64> = HashMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        comm.insert(node.clone(), index);
+        comm_tot.insert(index, degree[node]);
+    }
+    for _ in 0..25 {
+        let mut moved = false;
+        for node in nodes {
+            let current = comm[node];
+            let ki = degree[node];
+            let mut to_comm: HashMap<usize, f64> = HashMap::new();
+            for (other, weight) in &local[node] {
+                *to_comm.entry(comm[other]).or_default() += *weight;
+            }
+            let kin_current = to_comm.get(&current).copied().unwrap_or(0.0);
+            let tot_current = comm_tot[&current];
+            let mut best = current;
+            let mut best_delta = 0.0;
+            for (target, kin_target) in &to_comm {
+                if *target == current {
+                    continue;
+                }
+                let tot_target = comm_tot[target];
+                let delta = (*kin_target - kin_current) / two_m
+                    - gamma * ki * (tot_target - tot_current + ki) / (two_m * two_m);
+                if delta > best_delta + 1e-9 {
+                    best_delta = delta;
+                    best = *target;
+                }
+            }
+            if best != current {
+                comm_tot.insert(current, tot_current - ki);
+                *comm_tot.entry(best).or_default() += ki;
+                comm.insert(node.clone(), best);
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    let mut groups: HashMap<usize, Vec<String>> = HashMap::new();
+    for node in nodes {
+        groups.entry(comm[node]).or_default().push(node.clone());
+    }
+    groups.into_values().collect()
+}
+
+fn partition_score(parts: &[Vec<String>], tracks_by_artist: &HashMap<String, Vec<String>>) -> i32 {
+    let mut score = 0;
+    for part in parts {
+        let songs = song_count(part, tracks_by_artist);
+        if (20..=70).contains(&songs) {
+            score += 3000 + songs as i32;
+        } else if songs > 70 {
+            score += 200;
+        } else if songs > 0 {
+            score -= 40;
+        }
+    }
+    score
+}
+
+fn split_sound_groups(
+    nodes: Vec<String>,
+    neighbors: &HashMap<String, Vec<(String, f64)>>,
+    tracks_by_artist: &HashMap<String, Vec<String>>,
+    depth: u8,
+) -> Vec<Vec<String>> {
+    let songs = song_count(&nodes, tracks_by_artist);
+    if depth > 4 || nodes.len() < 3 || songs <= 55 {
+        return vec![nodes];
+    }
+    let alone = partition_score(&[nodes.clone()], tracks_by_artist);
+    let mut best_parts: Option<Vec<Vec<String>>> = None;
+    let mut best_score = alone;
+    for gamma in [1.6, 2.4, 3.4] {
+        let parts = louvain_communities(&nodes, neighbors, gamma);
+        if parts.len() < 2 {
+            continue;
+        }
+        let score = partition_score(&parts, tracks_by_artist);
+        let largest = parts
+            .iter()
+            .map(|part| song_count(part, tracks_by_artist))
+            .max()
+            .unwrap_or(0);
+        if score > best_score && largest + 12 < songs {
+            best_score = score;
+            best_parts = Some(parts);
+        }
+    }
+    let Some(parts) = best_parts else {
+        return vec![nodes];
+    };
+    let mut kept: Vec<Vec<String>> = Vec::new();
+    let mut smalls: Vec<Vec<String>> = Vec::new();
+    for part in parts {
+        if song_count(&part, tracks_by_artist) >= 20 {
+            kept.extend(split_sound_groups(part, neighbors, tracks_by_artist, depth + 1));
+        } else {
+            smalls.push(part);
+        }
+    }
+    if kept.is_empty() {
+        return vec![nodes];
+    }
+    for part in smalls {
+        let mut best_index: Option<usize> = None;
+        let mut best_weight = 0.0;
+        for artist in &part {
+            let Some(links) = neighbors.get(artist) else {
+                continue;
+            };
+            for (other, weight) in links {
+                if *weight < 0.7 {
+                    continue;
+                }
+                if let Some(index) = kept.iter().position(|group| group.iter().any(|name| name == other)) {
+                    if *weight > best_weight {
+                        best_weight = *weight;
+                        best_index = Some(index);
+                    }
+                }
+            }
+        }
+        if let Some(index) = best_index {
+            kept[index].extend(part);
+        }
+    }
+    kept
+}
+
 fn build_sound_clusters(
     artists: &[String],
     tracks_by_artist: &HashMap<String, Vec<String>>,
@@ -283,23 +453,20 @@ fn build_sound_clusters(
             continue;
         }
         let mut seen = HashSet::new();
-        for tag in tags {
+        for tag in tags.iter().take(3) {
             if seen.insert(tag.clone()) {
                 tag_members.entry(tag.clone()).or_default().push(artist.clone());
             }
         }
     }
-    let artist_count = artists.len().max(1) as f64;
     for members in tag_members.values() {
-        let df = members.len();
-        if df < 2 || df as f64 > artist_count * 0.35 {
+        if members.len() < 2 || members.len() > 8 {
             continue;
         }
-        let weight = 0.45 / (df as f64).ln().max(1.1);
         for i in 0..members.len() {
             for j in (i + 1)..members.len() {
                 let key = undirected(&members[i], &members[j]);
-                edge_weight.entry(key).and_modify(|old| *old += weight).or_insert(weight);
+                edge_weight.entry(key).and_modify(|old| *old += 0.28).or_insert(0.28);
             }
         }
     }
@@ -310,100 +477,11 @@ fn build_sound_clusters(
         neighbors.entry(right.clone()).or_default().push((left.clone(), *weight));
     }
 
-    let mut order: Vec<String> = artists.to_vec();
-    order.sort();
-    let mut labels: HashMap<String, usize> = HashMap::new();
-    for (index, artist) in order.iter().enumerate() {
-        labels.insert(artist.clone(), index);
-    }
-    for _ in 0..30 {
-        let mut changed = false;
-        for artist in &order {
-            let Some(links) = neighbors.get(artist) else {
-                continue;
-            };
-            let current = labels[artist];
-            let mut scores: HashMap<usize, f64> = HashMap::new();
-            *scores.entry(current).or_default() += 0.2;
-            for (other, weight) in links {
-                if let Some(label) = labels.get(other) {
-                    *scores.entry(*label).or_default() += *weight;
-                }
-            }
-            let mut best_label = current;
-            let mut best_score = f64::MIN;
-            for (label, score) in scores {
-                if score > best_score + 0.0001 || ((score - best_score).abs() <= 0.0001 && label < best_label) {
-                    best_score = score;
-                    best_label = label;
-                }
-            }
-            if best_label != current {
-                labels.insert(artist.clone(), best_label);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    let mut groups: HashMap<usize, Vec<String>> = HashMap::new();
-    for artist in &order {
-        groups.entry(labels[artist]).or_default().push(artist.clone());
-    }
-    let mut communities: Vec<Vec<String>> = groups.into_values().collect();
-    let song_count = |members: &[String]| -> usize {
-        members
-            .iter()
-            .map(|artist| tracks_by_artist.get(artist).map(|ids| ids.len()).unwrap_or(0))
-            .sum()
-    };
-    for _ in 0..40 {
-        let Some(small_index) = communities
-            .iter()
-            .enumerate()
-            .filter(|(_, members)| song_count(members) < 20)
-            .min_by_key(|(_, members)| song_count(members))
-            .map(|(index, _)| index)
-        else {
-            break;
-        };
-        let small = communities[small_index].clone();
-        let small_set: HashSet<String> = small.iter().cloned().collect();
-        let mut votes: HashMap<usize, f64> = HashMap::new();
-        for artist in &small {
-            if let Some(links) = neighbors.get(artist) {
-                for (other, weight) in links {
-                    if small_set.contains(other) {
-                        continue;
-                    }
-                    if let Some(dest) = communities
-                        .iter()
-                        .position(|members| members.iter().any(|name| name == other))
-                    {
-                        if dest != small_index {
-                            *votes.entry(dest).or_default() += *weight;
-                        }
-                    }
-                }
-            }
-        }
-        if let Some((dest, _)) = votes
-            .into_iter()
-            .max_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
-        {
-            let moving = communities[small_index].clone();
-            communities[dest].extend(moving);
-            communities.remove(small_index);
-        } else {
-            communities.remove(small_index);
-        }
-    }
+    let communities = split_sound_groups(artists.to_vec(), &neighbors, tracks_by_artist, 0);
 
     let mut clusters = Vec::new();
     for members in communities {
-        if song_count(&members) < 20 {
+        if song_count(&members, tracks_by_artist) < 20 {
             continue;
         }
         let member_set: HashSet<String> = members.iter().cloned().collect();
@@ -431,6 +509,7 @@ fn build_sound_clusters(
             core_artists = members.clone();
             fringe_artists.clear();
         }
+        let artist_count = artists.len().max(1) as f64;
         let mut tag_score: HashMap<String, f64> = HashMap::new();
         for artist in &members {
             let Some(tags) = tags_by_artist.get(artist) else {
@@ -2349,7 +2428,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.30 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.31 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2396,7 +2475,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.30 listening admin={ingress_port} public={public_port}"
+        "version 0.2.31 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

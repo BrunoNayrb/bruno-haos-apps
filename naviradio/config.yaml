@@ -1,6 +1,6 @@
 name: "NaviRadio"
 description: "Standalone auto-generated endless radio stations powered by Navidrome"
-version: "0.2.30"
+version: "0.2.31"
 slug: "naviradio"
 init: false
 arch:

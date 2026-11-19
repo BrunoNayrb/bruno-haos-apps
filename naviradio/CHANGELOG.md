@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.31
+
+- Clustering no longer collapses the library into a few giant stations. Groups are split by who is actually similar, and a broad listener tag cannot glue unrelated artists together.
+- A station stays between about 20 and 70 songs when the graph supports that split. Smaller groups join only a station they strongly sound like.
+
 ## 0.2.30
 
 - Stations come from an artist similarity graph. Similar artists and shared listener tags are the links. Clustering groups artists by who sounds like whom. The file genre tag is not used.
