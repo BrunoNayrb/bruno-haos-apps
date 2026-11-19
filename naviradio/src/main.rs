@@ -147,72 +147,6 @@ fn hash_pw(pw: &str) -> String {
     hex::encode(h.finalize())
 }
 
-struct StyleInfo {
-    key: &'static str,
-    label: &'static str,
-    family: &'static str,
-    #[allow(dead_code)]
-    family_label: &'static str,
-    phrases: &'static [&'static str],
-}
-
-const STYLES: &[StyleInfo] = &[
-    StyleInfo { key: "pop-punk", label: "Pop-Punk", family: "punk", family_label: "Punk", phrases: &["pop punk"] },
-    StyleInfo { key: "emo", label: "Emo", family: "punk", family_label: "Punk", phrases: &["emo"] },
-    StyleInfo { key: "hardcore", label: "Hardcore", family: "punk", family_label: "Punk", phrases: &["post hardcore", "hardcore"] },
-    StyleInfo { key: "punk", label: "Punk", family: "punk", family_label: "Punk", phrases: &["ska punk", "punk"] },
-    StyleInfo { key: "indie-rock", label: "Indie Rock", family: "rock", family_label: "Rock", phrases: &["indie folk", "indie rock"] },
-    StyleInfo { key: "alt-rock", label: "Alternative Rock", family: "rock", family_label: "Rock", phrases: &["alternative rock", "altern rock", "alt rock"] },
-    StyleInfo { key: "classic-rock", label: "Classic Rock", family: "rock", family_label: "Rock", phrases: &["classic rock"] },
-    StyleInfo { key: "hard-rock", label: "Hard Rock", family: "rock", family_label: "Rock", phrases: &["hard rock"] },
-    StyleInfo { key: "grunge", label: "Grunge", family: "rock", family_label: "Rock", phrases: &["grunge"] },
-    StyleInfo { key: "britpop", label: "Britpop", family: "rock", family_label: "Rock", phrases: &["britpop", "brit pop"] },
-    StyleInfo { key: "pop-rock", label: "Pop Rock", family: "rock", family_label: "Rock", phrases: &["pop rock"] },
-    StyleInfo { key: "garage-rock", label: "Garage Rock", family: "rock", family_label: "Rock", phrases: &["garage rock"] },
-    StyleInfo { key: "prog-rock", label: "Progressive Rock", family: "rock", family_label: "Rock", phrases: &["progressive rock", "prog rock"] },
-    StyleInfo { key: "psych-rock", label: "Psychedelic Rock", family: "rock", family_label: "Rock", phrases: &["psychedelic rock", "psych rock", "psychedelic"] },
-    StyleInfo { key: "southern-rock", label: "Southern Rock", family: "rock", family_label: "Rock", phrases: &["southern rock", "swamp rock"] },
-    StyleInfo { key: "blues-rock", label: "Blues Rock", family: "rock", family_label: "Rock", phrases: &["blues rock"] },
-    StyleInfo { key: "folk-rock", label: "Folk Rock", family: "rock", family_label: "Rock", phrases: &["folk rock"] },
-    StyleInfo { key: "rock", label: "Rock", family: "rock", family_label: "Rock", phrases: &["rock and roll", "rock n roll", "rock"] },
-    StyleInfo { key: "heavy-metal", label: "Heavy Metal", family: "metal", family_label: "Metal", phrases: &["heavy metal"] },
-    StyleInfo { key: "death-metal", label: "Death Metal", family: "metal", family_label: "Metal", phrases: &["death metal"] },
-    StyleInfo { key: "black-metal", label: "Black Metal", family: "metal", family_label: "Metal", phrases: &["black metal"] },
-    StyleInfo { key: "thrash", label: "Thrash Metal", family: "metal", family_label: "Metal", phrases: &["thrash metal", "thrash"] },
-    StyleInfo { key: "doom", label: "Doom Metal", family: "metal", family_label: "Metal", phrases: &["doom metal", "doom"] },
-    StyleInfo { key: "metalcore", label: "Metalcore", family: "metal", family_label: "Metal", phrases: &["metalcore"] },
-    StyleInfo { key: "nu-metal", label: "Nu Metal", family: "metal", family_label: "Metal", phrases: &["nu metal"] },
-    StyleInfo { key: "industrial", label: "Industrial", family: "metal", family_label: "Metal", phrases: &["industrial"] },
-    StyleInfo { key: "metal", label: "Metal", family: "metal", family_label: "Metal", phrases: &["alternative metal", "industrial metal", "metal"] },
-    StyleInfo { key: "hip-hop", label: "Hip-Hop", family: "hiphop", family_label: "Hip-Hop & Rap", phrases: &["alternative hip hop", "alternative hiphop", "hip hop", "hiphop"] },
-    StyleInfo { key: "rap", label: "Rap", family: "hiphop", family_label: "Hip-Hop & Rap", phrases: &["g funk", "boom bap", "trap", "rap"] },
-    StyleInfo { key: "indie-pop", label: "Indie Pop", family: "pop", family_label: "Pop", phrases: &["indie pop", "folk pop"] },
-    StyleInfo { key: "shoegaze", label: "Shoegaze", family: "alternative", family_label: "Alternative & Indie", phrases: &["shoegaze", "dream pop"] },
-    StyleInfo { key: "indie", label: "Indie", family: "alternative", family_label: "Alternative & Indie", phrases: &["indie"] },
-    StyleInfo { key: "alternative", label: "Alternative", family: "alternative", family_label: "Alternative & Indie", phrases: &["stomp and holler", "americana", "alternative", "alt"] },
-    StyleInfo { key: "electropop", label: "Electropop", family: "pop", family_label: "Pop", phrases: &["electro pop", "electropop", "synth pop", "synthpop", "dance pop"] },
-    StyleInfo { key: "kpop", label: "K-Pop", family: "pop", family_label: "Pop", phrases: &["k pop", "kpop"] },
-    StyleInfo { key: "pop", label: "Pop", family: "pop", family_label: "Pop", phrases: &["pop"] },
-    StyleInfo { key: "drum-bass", label: "Drum and Bass", family: "electronic", family_label: "Electronic", phrases: &["drum and bass", "drum n bass"] },
-    StyleInfo { key: "dubstep", label: "Dubstep", family: "electronic", family_label: "Electronic", phrases: &["dubstep"] },
-    StyleInfo { key: "house", label: "House", family: "electronic", family_label: "Electronic", phrases: &["house"] },
-    StyleInfo { key: "techno", label: "Techno", family: "electronic", family_label: "Electronic", phrases: &["techno"] },
-    StyleInfo { key: "trance", label: "Trance", family: "electronic", family_label: "Electronic", phrases: &["trance"] },
-    StyleInfo { key: "ambient", label: "Ambient", family: "electronic", family_label: "Electronic", phrases: &["ambient"] },
-    StyleInfo { key: "electronic", label: "Electronic", family: "electronic", family_label: "Electronic", phrases: &["electronica", "electronic", "edm"] },
-    StyleInfo { key: "rnb", label: "R&B", family: "soul", family_label: "Soul & R&B", phrases: &["rhythm and blues", "r&b", "rnb"] },
-    StyleInfo { key: "funk", label: "Funk", family: "soul", family_label: "Soul & R&B", phrases: &["funk"] },
-    StyleInfo { key: "soul", label: "Soul", family: "soul", family_label: "Soul & R&B", phrases: &["neo soul", "motown", "soul"] },
-    StyleInfo { key: "country", label: "Country", family: "country", family_label: "Country", phrases: &["outlaw country", "bluegrass", "country"] },
-    StyleInfo { key: "folk", label: "Folk", family: "folk", family_label: "Folk", phrases: &["singer songwriter", "folk"] },
-    StyleInfo { key: "blues", label: "Blues", family: "blues", family_label: "Blues", phrases: &["blues"] },
-    StyleInfo { key: "jazz", label: "Jazz", family: "jazz", family_label: "Jazz", phrases: &["jazz fusion", "bebop", "jazz"] },
-    StyleInfo { key: "reggae", label: "Reggae", family: "reggae", family_label: "Reggae", phrases: &["dancehall", "reggae", "ska"] },
-    StyleInfo { key: "classical", label: "Classical", family: "classical", family_label: "Classical", phrases: &["classical", "baroque", "opera"] },
-    StyleInfo { key: "soundtrack", label: "Soundtrack", family: "soundtrack", family_label: "Soundtrack", phrases: &["soundtrack", "score"] },
-    StyleInfo { key: "latin", label: "Latin", family: "latin", family_label: "Latin", phrases: &["reggaeton", "bachata", "cumbia", "salsa", "latin"] },
-];
-
 fn normalize_genre_text(raw: &str) -> String {
     let mut out = String::new();
     let mut space = false;
@@ -234,123 +168,48 @@ fn normalize_genre_text(raw: &str) -> String {
     out.trim().to_string()
 }
 
-fn find_phrase(text: &str, phrase: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut start = 0;
-    while let Some(pos) = text[start..].find(phrase) {
-        let abs = start + pos;
-        let before_ok = abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
-        let after = abs + phrase.len();
-        let after_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-        if before_ok && after_ok {
-            return Some(abs);
-        }
-        start = abs + phrase.len().max(1);
-    }
-    None
-}
-
-fn classify_style(raw: &str) -> Option<&'static StyleInfo> {
+fn clean_tag(raw: &str) -> Option<String> {
     let text = normalize_genre_text(raw);
-    if text.is_empty() || matches!(text.as_str(), "unknown" | "other" | "various" | "misc" | "general") {
+    if text.is_empty()
+        || text.chars().all(|ch| ch.is_ascii_digit())
+        || matches!(
+            text.as_str(),
+            "unknown" | "other" | "various" | "misc" | "general" | "soundtrack" | "score" | "billboard" | "album"
+        )
+    {
         return None;
     }
-    let mut best: Option<(usize, usize, usize)> = None;
-    for (index, style) in STYLES.iter().enumerate() {
-        for phrase in style.phrases {
-            if let Some(pos) = find_phrase(&text, phrase) {
-                let rank = (pos, usize::MAX - phrase.len(), index);
-                if best.map(|current| rank < current).unwrap_or(true) {
-                    best = Some(rank);
-                }
-            }
+    Some(text)
+}
+
+fn top_tag(tags: &[(String, u64)]) -> Option<String> {
+    let mut best: Option<(u64, usize, String)> = None;
+    for (tag, count) in tags {
+        let Some(clean) = clean_tag(tag) else {
+            continue;
+        };
+        let score = (*count).max(1);
+        let rank = (score, clean.len(), clean);
+        if best.as_ref().map(|current| rank.0 > current.0 || (rank.0 == current.0 && rank.1 > current.1)).unwrap_or(true) {
+            best = Some(rank);
         }
     }
-    best.map(|(_, _, index)| &STYLES[index])
+    best.map(|(_, _, tag)| tag)
 }
 
-fn style_by_key(key: &str) -> Option<&'static StyleInfo> {
-    STYLES.iter().find(|style| style.key == key)
-}
-
-fn style_is_specific(style: &str) -> bool {
-    !matches!(
-        style,
-        "" | "mix"
-            | "rock"
-            | "pop"
-            | "metal"
-            | "punk"
-            | "alternative"
-            | "indie"
-            | "hip-hop"
-            | "rap"
-            | "electronic"
-            | "soundtrack"
-            | "folk"
-            | "blues"
-            | "jazz"
-            | "reggae"
-            | "classical"
-            | "country"
-            | "latin"
-            | "soul"
-    )
-}
-
-fn style_neighbor(style: &str) -> Option<&'static str> {
-    Some(match style {
-        "shoegaze" | "indie" | "britpop" | "folk-rock" | "folk" | "indie-pop" => "indie-rock",
-        "grunge" | "garage-rock" | "psych-rock" | "alternative" => "alt-rock",
-        "emo" | "hardcore" | "pop-punk" => "punk",
-        "nu-metal" | "metalcore" | "industrial" | "heavy-metal" => "metal",
-        "rap" => "hip-hop",
-        "electropop" | "kpop" | "pop-rock" => "pop",
-        "blues-rock" | "southern-rock" | "classic-rock" | "hard-rock" => "rock",
-        _ => return None,
-    })
-}
-
-fn styles_close(left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
+fn title_tag(tag: &str) -> String {
+    let mut words = Vec::new();
+    for word in tag.split_whitespace() {
+        let mut chars = word.chars();
+        let Some(first) = chars.next() else { continue };
+        let mut titled = first.to_uppercase().collect::<String>();
+        titled.push_str(chars.as_str());
+        words.push(titled);
     }
-    if style_neighbor(left) == Some(right) || style_neighbor(right) == Some(left) {
-        return true;
-    }
-    let left_family = style_by_key(left).map(|style| style.family);
-    let right_family = style_by_key(right).map(|style| style.family);
-    matches!(
-        (left_family, right_family),
-        (Some(family), Some(other))
-            if family == other && !matches!(family, "rock" | "alternative")
-    )
-}
-
-fn broad_style(style_key: &str) -> (&'static str, &'static str) {
-    match style_key {
-        "hip-hop" | "rap" => ("hiphop", "Hip-Hop"),
-        "alt-rock" | "indie-rock" | "indie" | "alternative" | "shoegaze" | "britpop" | "grunge"
-        | "folk-rock" => ("alternative", "Alternative"),
-        "pop-punk" | "emo" | "hardcore" | "punk" => ("punk", "Punk"),
-        "heavy-metal" | "death-metal" | "black-metal" | "thrash" | "doom" | "metalcore"
-        | "nu-metal" | "industrial" | "metal" => ("metal", "Metal"),
-        "pop" | "electropop" | "kpop" => ("pop", "Pop"),
-        "drum-bass" | "dubstep" | "house" | "techno" | "trance" | "ambient" | "electronic" => {
-            ("electronic", "Electronic")
-        }
-        "rnb" | "funk" | "soul" => ("soul", "Soul & R&B"),
-        "country" => ("country", "Country"),
-        "folk" => ("folk", "Folk"),
-        "blues" => ("blues", "Blues"),
-        "jazz" => ("jazz", "Jazz"),
-        "reggae" => ("reggae", "Reggae"),
-        "classical" => ("classical", "Classical"),
-        "soundtrack" => ("soundtrack", "Soundtrack"),
-        "latin" => ("latin", "Latin"),
-        "rock" | "classic-rock" | "hard-rock" | "pop-rock" | "garage-rock" | "prog-rock"
-        | "psych-rock" | "southern-rock" | "blues-rock" => ("rock", "Rock"),
-        _ => ("mix", "Mix"),
+    if words.is_empty() {
+        "Mix".to_string()
+    } else {
+        words.join(" ")
     }
 }
 
@@ -374,37 +233,6 @@ struct StationBucket {
     track_ids: Vec<String>,
     cover: String,
     style_labels: HashSet<String>,
-}
-
-fn family_from_tags(tags: &[(String, u64)]) -> Option<String> {
-    let mut scores: HashMap<&str, u64> = HashMap::new();
-    for (tag, count) in tags {
-        if let Some(style) = classify_style(tag) {
-            *scores.entry(style.key).or_default() += (*count).max(1);
-        }
-    }
-    if scores.is_empty() {
-        return None;
-    }
-    let mut ranked: Vec<(&str, u64)> = scores.into_iter().collect();
-    ranked.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
-    let (best_key, best_score) = ranked[0];
-    let generic = matches!(
-        best_key,
-        "rock" | "pop" | "metal" | "punk" | "electronic" | "hip-hop" | "alternative" | "indie"
-    );
-    if generic {
-        if let Some(best) = style_by_key(best_key) {
-            if let Some((specific, _)) = ranked.iter().skip(1).find(|(key, score)| {
-                *score * 2 >= best_score
-                    && style_by_key(key)
-                        .is_some_and(|style| style.family == best.family && style.key != best.key)
-            }) {
-                return Some((*specific).to_string());
-            }
-        }
-    }
-    Some(best_key.to_string())
 }
 
 async fn musicbrainz_artist_mbid(http: &reqwest::Client, name: &str) -> Option<String> {
@@ -478,8 +306,8 @@ async fn listenbrainz_tag_families(
                     Some((name, count))
                 })
                 .collect();
-            if let Some(family) = family_from_tags(&parsed) {
-                families.insert(mbid.to_string(), family);
+            if let Some(tag) = top_tag(&parsed) {
+                families.insert(mbid.to_string(), tag);
             }
         }
     }
@@ -1608,9 +1436,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                         let cover = json_str(&s["coverArt"]);
                         if cover.is_empty() { id.clone() } else { cover }
                     };
-                    let style_key = classify_style(&genre)
-                        .map(|style| style.key.to_string())
-                        .unwrap_or_default();
+                    let style_key = clean_tag(&genre).unwrap_or_default();
                     if !id.is_empty() {
                         let song_year = s["year"].as_u64().unwrap_or(0) as u16;
                         let year = if (1950..2030).contains(&song_year) {
@@ -1685,23 +1511,10 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
     }
 
-    let artists_with_specific_style: HashSet<String> = all_tracks
-        .iter()
-        .filter(|track| style_is_specific(&track.6))
-        .map(|track| track.2.to_lowercase())
-        .collect();
-    let mut missing_names: Vec<String> = file_genres
-        .keys()
-        .filter(|name| !artist_mbids.contains_key(*name) && !artists_with_specific_style.contains(*name))
-        .cloned()
-        .collect();
-    for track in &all_tracks {
-        let artist_key = track.2.to_lowercase();
-        if !artist_mbids.contains_key(&artist_key)
-            && !artists_with_specific_style.contains(&artist_key)
-            && !missing_names.contains(&artist_key)
-        {
-            missing_names.push(artist_key);
+    let mut missing_names: Vec<String> = Vec::new();
+    for (artist_key, _) in &artist_nd_ids {
+        if !artist_mbids.contains_key(artist_key) && !missing_names.contains(artist_key) {
+            missing_names.push(artist_key.clone());
         }
     }
     log_ha(&format!(
@@ -1734,8 +1547,8 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             continue;
         }
         let tags: Vec<(String, u64)> = genres.iter().map(|genre| (genre.clone(), 1)).collect();
-        if let Some(family) = family_from_tags(&tags) {
-            artist_family.insert(artist_key.clone(), family);
+        if let Some(tag) = top_tag(&tags) {
+            artist_family.insert(artist_key.clone(), tag);
             from_files += 1;
         }
     }
@@ -1779,71 +1592,19 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
     }
 
-    let fallback_family = artist_family
-        .values()
-        .fold(HashMap::<String, usize>::new(), |mut counts, family| {
-            *counts.entry(family.clone()).or_default() += 1;
-            counts
-        })
-        .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map(|(family, _)| family)
-        .unwrap_or_else(|| "mix".to_string());
-    let mut from_fallback = 0usize;
-    for artist_key in &artist_names {
-        if artist_family.contains_key(artist_key) {
-            continue;
-        }
-        artist_family.insert(artist_key.clone(), fallback_family.clone());
-        from_fallback += 1;
-    }
     log_ha(&format!(
-        "styles assigned listenbrainz={from_listenbrainz} file-tags={from_files} similar={from_similar} nearest={from_fallback}"
+        "styles assigned listenbrainz={from_listenbrainz} file-tags={from_files} similar={from_similar} unlabeled={}",
+        artist_names.len().saturating_sub(artist_family.len())
     ));
 
-    let mut sibling_votes: HashMap<String, HashMap<String, usize>> = HashMap::new();
-    for track in &all_tracks {
-        if !style_is_specific(&track.6) {
-            continue;
-        }
-        *sibling_votes
-            .entry(track.2.to_lowercase())
-            .or_default()
-            .entry(track.6.clone())
-            .or_default() += 1;
-    }
-    let mut sibling_style: HashMap<String, String> = HashMap::new();
-    for (artist, counts) in sibling_votes {
-        if let Some((style, _)) = counts.into_iter().max_by_key(|(_, count)| *count) {
-            sibling_style.insert(artist, style);
-        }
-    }
-    let mut from_specific_file = 0usize;
-    let mut from_replaced = 0usize;
     for track in &mut all_tracks {
-        if style_is_specific(&track.6) {
-            from_specific_file += 1;
-            continue;
-        }
         let key = track.2.to_lowercase();
-        let junk = track.6.is_empty() || track.6 == "soundtrack";
-        if let Some(style) = artist_family.get(&key) {
-            if style_is_specific(style) || junk && style != "soundtrack" && style != "mix" {
-                track.6 = style.clone();
-                from_replaced += 1;
-                continue;
-            }
-        }
-        if junk {
-            if let Some(style) = sibling_style.get(&key) {
-                track.6 = style.clone();
-                from_replaced += 1;
-            }
+        if let Some(tag) = artist_family.get(&key) {
+            track.6 = tag.clone();
+        } else {
+            track.6 = clean_tag(&track.5).unwrap_or_default();
         }
     }
-    log_ha(&format!(
-        "track styles specific-file={from_specific_file} replaced-generic={from_replaced}"
-    ));
 
     let conn = state.db.lock().unwrap();
     conn.execute("DELETE FROM tracks", []).unwrap();
@@ -1868,61 +1629,18 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
 
     let mut genre_buckets: HashMap<String, StationBucket> = HashMap::new();
     for track in &all_tracks {
-        let style = style_by_key(&track.6);
-        let key = style.map(|item| item.key.to_string()).unwrap_or_else(|| "mix".to_string());
-        if key == "mix" || key == "soundtrack" {
+        if track.6.is_empty() {
             continue;
         }
-        let bucket = genre_buckets.entry(key).or_insert_with(|| StationBucket {
-            label: style.map(|item| item.label.to_string()).unwrap_or_else(|| "Mix".to_string()),
-            family: style.map(|item| item.family.to_string()).unwrap_or_else(|| "mix".to_string()),
+        let key = track.6.clone();
+        let bucket = genre_buckets.entry(key.clone()).or_insert_with(|| StationBucket {
+            label: title_tag(&key),
+            family: key.clone(),
             track_ids: Vec::new(),
             cover: track.8.clone(),
             style_labels: HashSet::new(),
         });
         bucket.track_ids.push(track.0.clone());
-    }
-    let small_keys: Vec<String> = genre_buckets
-        .iter()
-        .filter(|(_, bucket)| bucket.track_ids.len() < 20)
-        .map(|(key, _)| key.clone())
-        .collect();
-    for key in small_keys {
-        let Some(neighbor) = style_neighbor(&key) else {
-            continue;
-        };
-        if !genre_buckets.contains_key(neighbor) {
-            let Some(info) = style_by_key(neighbor) else {
-                continue;
-            };
-            genre_buckets.insert(
-                neighbor.to_string(),
-                StationBucket {
-                    label: info.label.to_string(),
-                    family: info.family.to_string(),
-                    track_ids: Vec::new(),
-                    cover: String::new(),
-                    style_labels: HashSet::new(),
-                },
-            );
-        }
-        let Some(small) = genre_buckets.remove(&key) else {
-            continue;
-        };
-        let moved = small.track_ids.clone();
-        let absorbed = small.label.clone();
-        if let Some(dest) = genre_buckets.get_mut(neighbor) {
-            if dest.cover.is_empty() {
-                dest.cover = small.cover.clone();
-            }
-            dest.track_ids.extend(small.track_ids);
-            dest.style_labels.insert(absorbed);
-        }
-        for track in &mut all_tracks {
-            if moved.contains(&track.0) {
-                track.6 = neighbor.to_string();
-            }
-        }
     }
     let established: Vec<String> = genre_buckets
         .iter()
@@ -1965,10 +1683,6 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             .into_iter()
             .max_by_key(|(_, count)| *count)
             .map(|(style, _)| style)
-            .or_else(|| {
-                let family = style_by_key(&key).map(|style| style.family);
-                established.iter().find(|item| style_by_key(item).map(|style| style.family) == family).cloned()
-            })
             .or_else(|| established.first().cloned());
         let Some(dest_key) = dest_key else {
             log_ha(&format!("dropped tiny station {} ({} songs)", small.label, small.track_ids.len()));
@@ -2058,14 +1772,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
 
     for (broad, bucket) in &genre_buckets {
-        let mut names: Vec<String> = bucket.style_labels.iter().cloned().collect();
-        names.sort();
-        names.truncate(2);
-        let description = if names.is_empty() {
-            "This style".to_string()
-        } else {
-            format!("Also includes {}", names.join(" and "))
-        };
+        let description = "Grouped from the artists that sound like each other.";
         let st_id = format!("genre-{broad}");
         let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
         let _ = conn.execute(
@@ -2177,17 +1884,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let pick_sound = |votes: &HashMap<String, usize>| -> Option<String> {
         let mut ranked: Vec<(&String, &usize)> = votes.iter().collect();
         ranked.sort_by(|left, right| right.1.cmp(left.1).then_with(|| left.0.cmp(right.0)));
-        let (best, best_count) = ranked.first()?;
-        if matches!(best.as_str(), "rock" | "pop" | "alternative" | "metal" | "punk" | "hip-hop") {
-            if let Some((other, count)) = ranked
-                .iter()
-                .find(|(name, _)| !matches!(name.as_str(), "rock" | "pop" | "alternative" | "metal" | "punk" | "hip-hop"))
-            {
-                if *count * 2 >= **best_count {
-                    return Some((*other).clone());
-                }
-            }
-        }
+        let (best, _) = ranked.first()?;
         Some((*best).clone())
     };
     let mut seeds: Vec<String> = by_artist
@@ -2240,7 +1937,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                         artist_broad_votes
                             .get(*name)
                             .and_then(|counts| pick_sound(counts))
-                            .is_some_and(|other| styles_close(&sound, &other))
+                            .is_some_and(|other| other == sound)
                     })
                     .map(|(name, ids)| (ids.len(), (*name).clone()))
                     .collect();
@@ -2529,7 +2226,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.28 listening admin={ingress_port} public={public_port}"
+        "version 0.2.29 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

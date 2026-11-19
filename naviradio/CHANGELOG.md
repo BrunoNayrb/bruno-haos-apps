@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.29
+
+- The genre list is gone. Stations are named from the tags the artists actually have, and small groups join the artists they sound like. Nothing is forced into a fixed set of genres.
+
 ## 0.2.28
 
 - Genre stations are specific styles. Alternative Rock, Indie Rock, Nu Metal, and Pop stay separate instead of one Alternative pile.
