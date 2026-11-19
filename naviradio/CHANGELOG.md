@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.30
+
+- Stations come from an artist similarity graph. Similar artists and shared listener tags are the links. Clustering groups artists by who sounds like whom. The file genre tag is not used.
+- A station is named from the listener tags that describe that group. Artists on the border between groups play as the fringe.
+
 ## 0.2.29
 
 - The genre list is gone. Stations are named from the tags the artists actually have, and small groups join the artists they sound like. Nothing is forced into a fixed set of genres.
