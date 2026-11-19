@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.28
+
+- Genre stations are specific styles. Alternative Rock, Indie Rock, Nu Metal, and Pop stay separate instead of one Alternative pile.
+- A plain "Alternative" or "Rock" tag is not trusted. The artist style is used when the file tag is that generic. Soundtrack and other junk tags are ignored.
+- A style with fewer than 20 songs is folded into the closest style. Reggae and Soundtrack stations are not created.
+
 ## 0.2.27
 
 - A song keeps the genre on the file. ListenBrainz is used only when that tag is blank or junk.
