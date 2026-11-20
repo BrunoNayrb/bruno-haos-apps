@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.33
+
+- Genre stations come from AudioMuse similar songs. Songs that sound alike share a station, and the station is named with one main style, such as Rock or Hip-Hop.
+- Era stations use that same main style, not the detailed tag. A nu-metal song from Linkin Park lands in 2000s Alternative, not a station named after the sub-tag.
+- A style only becomes a station when the library has enough songs in it. Adding music later puts the new songs into the matching genre and era station on the next library check.
+
 ## 0.2.32
 
 - A Left Out station lists every song the scan did not put in a sound cluster. The add-on log names the artists with the most leftover songs.

@@ -197,21 +197,6 @@ fn clean_tag(raw: &str) -> Option<String> {
     Some(text)
 }
 
-fn top_tag(tags: &[(String, u64)]) -> Option<String> {
-    let mut best: Option<(u64, usize, String)> = None;
-    for (tag, count) in tags {
-        let Some(clean) = clean_tag(tag) else {
-            continue;
-        };
-        let score = (*count).max(1);
-        let rank = (score, clean.len(), clean);
-        if best.as_ref().map(|current| rank.0 > current.0 || (rank.0 == current.0 && rank.1 > current.1)).unwrap_or(true) {
-            best = Some(rank);
-        }
-    }
-    best.map(|(_, _, tag)| tag)
-}
-
 fn title_tag(tag: &str) -> String {
     let mut words = Vec::new();
     for word in tag.split_whitespace() {
@@ -226,38 +211,6 @@ fn title_tag(tag: &str) -> String {
     } else {
         words.join(" ")
     }
-}
-
-struct SoundCluster {
-    id: String,
-    name: String,
-    core_tracks: Vec<String>,
-    fringe_tracks: Vec<String>,
-    cover: String,
-}
-
-fn undirected(left: &str, right: &str) -> (String, String) {
-    if left <= right {
-        (left.to_string(), right.to_string())
-    } else {
-        (right.to_string(), left.to_string())
-    }
-}
-
-fn fnv_id(text: &str) -> String {
-    let mut hash = 14695981039346656037u64;
-    for byte in text.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(1099511628211);
-    }
-    format!("cluster-{hash:x}")
-}
-
-fn song_count(members: &[String], tracks_by_artist: &HashMap<String, Vec<String>>) -> usize {
-    members
-        .iter()
-        .map(|artist| tracks_by_artist.get(artist).map(|ids| ids.len()).unwrap_or(0))
-        .sum()
 }
 
 fn louvain_communities(
@@ -338,257 +291,6 @@ fn louvain_communities(
     groups.into_values().collect()
 }
 
-fn partition_score(parts: &[Vec<String>], tracks_by_artist: &HashMap<String, Vec<String>>) -> i32 {
-    let mut score = 0;
-    for part in parts {
-        let songs = song_count(part, tracks_by_artist);
-        if (20..=70).contains(&songs) {
-            score += 3000 + songs as i32;
-        } else if songs > 70 {
-            score += 200;
-        } else if songs > 0 {
-            score -= 40;
-        }
-    }
-    score
-}
-
-fn split_sound_groups(
-    nodes: Vec<String>,
-    neighbors: &HashMap<String, Vec<(String, f64)>>,
-    tracks_by_artist: &HashMap<String, Vec<String>>,
-    depth: u8,
-) -> Vec<Vec<String>> {
-    let songs = song_count(&nodes, tracks_by_artist);
-    if depth > 4 || nodes.len() < 3 || songs <= 55 {
-        return vec![nodes];
-    }
-    let alone = partition_score(&[nodes.clone()], tracks_by_artist);
-    let mut best_parts: Option<Vec<Vec<String>>> = None;
-    let mut best_score = alone;
-    for gamma in [1.6, 2.4, 3.4] {
-        let parts = louvain_communities(&nodes, neighbors, gamma);
-        if parts.len() < 2 {
-            continue;
-        }
-        let score = partition_score(&parts, tracks_by_artist);
-        let largest = parts
-            .iter()
-            .map(|part| song_count(part, tracks_by_artist))
-            .max()
-            .unwrap_or(0);
-        if score > best_score && largest + 12 < songs {
-            best_score = score;
-            best_parts = Some(parts);
-        }
-    }
-    let Some(parts) = best_parts else {
-        return vec![nodes];
-    };
-    let mut kept: Vec<Vec<String>> = Vec::new();
-    let mut smalls: Vec<Vec<String>> = Vec::new();
-    for part in parts {
-        if song_count(&part, tracks_by_artist) >= 20 {
-            kept.extend(split_sound_groups(part, neighbors, tracks_by_artist, depth + 1));
-        } else {
-            smalls.push(part);
-        }
-    }
-    if kept.is_empty() {
-        return vec![nodes];
-    }
-    for part in smalls {
-        let mut best_index: Option<usize> = None;
-        let mut best_weight = 0.0;
-        for artist in &part {
-            let Some(links) = neighbors.get(artist) else {
-                continue;
-            };
-            for (other, weight) in links {
-                if *weight < 0.7 {
-                    continue;
-                }
-                if let Some(index) = kept.iter().position(|group| group.iter().any(|name| name == other)) {
-                    if *weight > best_weight {
-                        best_weight = *weight;
-                        best_index = Some(index);
-                    }
-                }
-            }
-        }
-        if let Some(index) = best_index {
-            kept[index].extend(part);
-        }
-    }
-    kept
-}
-
-fn build_sound_clusters(
-    artists: &[String],
-    tracks_by_artist: &HashMap<String, Vec<String>>,
-    tags_by_artist: &HashMap<String, Vec<String>>,
-    similar: &[(String, String, f64)],
-    covers: &HashMap<String, String>,
-    display: &HashMap<String, String>,
-) -> Vec<SoundCluster> {
-    let artist_set: HashSet<String> = artists.iter().cloned().collect();
-    let mut edge_weight: HashMap<(String, String), f64> = HashMap::new();
-    for (left, right, weight) in similar {
-        if left != right && artist_set.contains(left) && artist_set.contains(right) {
-            let key = undirected(left, right);
-            edge_weight
-                .entry(key)
-                .and_modify(|old| {
-                    if *weight > *old {
-                        *old = *weight;
-                    }
-                })
-                .or_insert(*weight);
-        }
-    }
-
-    let mut tag_members: HashMap<String, Vec<String>> = HashMap::new();
-    for (artist, tags) in tags_by_artist {
-        if !artist_set.contains(artist) {
-            continue;
-        }
-        let mut seen = HashSet::new();
-        for tag in tags.iter().take(3) {
-            if seen.insert(tag.clone()) {
-                tag_members.entry(tag.clone()).or_default().push(artist.clone());
-            }
-        }
-    }
-    for members in tag_members.values() {
-        if members.len() < 2 || members.len() > 8 {
-            continue;
-        }
-        for i in 0..members.len() {
-            for j in (i + 1)..members.len() {
-                let key = undirected(&members[i], &members[j]);
-                edge_weight.entry(key).and_modify(|old| *old += 0.28).or_insert(0.28);
-            }
-        }
-    }
-
-    let mut neighbors: HashMap<String, Vec<(String, f64)>> = HashMap::new();
-    for ((left, right), weight) in &edge_weight {
-        neighbors.entry(left.clone()).or_default().push((right.clone(), *weight));
-        neighbors.entry(right.clone()).or_default().push((left.clone(), *weight));
-    }
-
-    let communities = split_sound_groups(artists.to_vec(), &neighbors, tracks_by_artist, 0);
-
-    let mut clusters = Vec::new();
-    for members in communities {
-        if song_count(&members, tracks_by_artist) < 20 {
-            continue;
-        }
-        let member_set: HashSet<String> = members.iter().cloned().collect();
-        let mut core_artists = Vec::new();
-        let mut fringe_artists = Vec::new();
-        for artist in &members {
-            let mut inside = 0.0;
-            let mut outside = 0.0;
-            if let Some(links) = neighbors.get(artist) {
-                for (other, weight) in links {
-                    if member_set.contains(other) {
-                        inside += *weight;
-                    } else {
-                        outside += *weight;
-                    }
-                }
-            }
-            if outside > 0.0 && outside >= inside * 0.5 {
-                fringe_artists.push(artist.clone());
-            } else {
-                core_artists.push(artist.clone());
-            }
-        }
-        if core_artists.is_empty() {
-            core_artists = members.clone();
-            fringe_artists.clear();
-        }
-        let artist_count = artists.len().max(1) as f64;
-        let mut tag_score: HashMap<String, f64> = HashMap::new();
-        for artist in &members {
-            let Some(tags) = tags_by_artist.get(artist) else {
-                continue;
-            };
-            let mut seen = HashSet::new();
-            for tag in tags {
-                if !seen.insert(tag.clone()) {
-                    continue;
-                }
-                let df = tag_members.get(tag).map(|items| items.len()).unwrap_or(1).max(1) as f64;
-                if df > artist_count * 0.35 {
-                    continue;
-                }
-                *tag_score.entry(tag.clone()).or_default() += 1.0 + (artist_count / df).ln().max(0.0);
-            }
-        }
-        let mut ranked: Vec<(String, f64)> = tag_score.into_iter().collect();
-        ranked.sort_by(|left, right| {
-            right
-                .1
-                .partial_cmp(&left.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(left.0.cmp(&right.0))
-        });
-        let name = if let Some((best, best_score)) = ranked.first() {
-            let mut names = vec![title_tag(best)];
-            if let Some((second, score)) = ranked.get(1) {
-                if *score >= best_score * 0.45 {
-                    names.push(title_tag(second));
-                }
-            }
-            names.join(" & ")
-        } else {
-            members
-                .iter()
-                .max_by_key(|artist| tracks_by_artist.get(*artist).map(|ids| ids.len()).unwrap_or(0))
-                .and_then(|artist| display.get(artist))
-                .map(|artist| format!("{artist} & similar"))
-                .unwrap_or_else(|| "Similar Artists".to_string())
-        };
-        let mut identity = members.clone();
-        identity.sort();
-        let id = fnv_id(&identity.join("|"));
-        let mut core_tracks = Vec::new();
-        let mut fringe_tracks = Vec::new();
-        for artist in &core_artists {
-            if let Some(ids) = tracks_by_artist.get(artist) {
-                core_tracks.extend(ids.iter().cloned());
-            }
-        }
-        for artist in &fringe_artists {
-            if let Some(ids) = tracks_by_artist.get(artist) {
-                fringe_tracks.extend(ids.iter().cloned());
-            }
-        }
-        let cover = members
-            .iter()
-            .find_map(|artist| covers.get(artist).cloned())
-            .unwrap_or_default();
-        clusters.push(SoundCluster {
-            id,
-            name,
-            core_tracks,
-            fringe_tracks,
-            cover,
-        });
-    }
-    clusters.sort_by(|left, right| {
-        right
-            .core_tracks
-            .len()
-            .saturating_add(right.fringe_tracks.len())
-            .cmp(&left.core_tracks.len().saturating_add(left.fringe_tracks.len()))
-            .then(left.name.cmp(&right.name))
-    });
-    clusters
-}
-
 fn decade_label(year: u16) -> Option<&'static str> {
     Some(match year {
         1950..=1959 => "50s",
@@ -603,91 +305,269 @@ fn decade_label(year: u16) -> Option<&'static str> {
     })
 }
 
-struct StationBucket {
-    label: String,
-    family: String,
-    track_ids: Vec<String>,
-    cover: String,
-    style_labels: HashSet<String>,
+fn phrase_has(text: &str, needle: &str) -> bool {
+    format!(" {text} ").contains(&format!(" {needle} "))
 }
 
-async fn musicbrainz_artist_mbid(http: &reqwest::Client, name: &str) -> Option<String> {
-    let query_name = name.replace('"', "");
-    for _ in 0..2 {
-        let response = http
-            .get("https://musicbrainz.org/ws/2/artist/")
-            .query(&[
-                ("query", format!("artist:\"{query_name}\"")),
-                ("fmt", "json".to_string()),
-                ("limit", "1".to_string()),
-            ])
-            .send()
-            .await
-            .ok()?;
-        if response.status().as_u16() == 503 || response.status().as_u16() == 429 {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            continue;
+/// Collapse a file genre to a short parent. "Nu Metal" and "Alternative Rock"
+/// both become Alternative. A tag this table does not know stays itself when
+/// it is already one or two words, so a new style can still form a station.
+fn main_family(raw: &str) -> Option<String> {
+    let text = clean_tag(raw)?;
+    const RULES: &[(&[&str], &str)] = &[
+        (
+            &[
+                "nu metal",
+                "rap metal",
+                "alternative metal",
+                "post grunge",
+                "rap rock",
+                "alternative rock",
+                "alt rock",
+                "indie rock",
+                "indie folk",
+                "indie pop",
+                "grunge",
+                "britpop",
+                "shoegaze",
+                "dream pop",
+                "post punk",
+                "emo",
+                "alternative",
+                "indie",
+            ],
+            "Alternative",
+        ),
+        (
+            &[
+                "hip hop",
+                "hiphop",
+                "gangsta",
+                "boom bap",
+                "g funk",
+                "trap",
+                "drill",
+                "phonk",
+                "rap",
+            ],
+            "Hip-Hop",
+        ),
+        (
+            &["rhythm and blues", "r&b", "rnb", "neo soul", "soul", "funk"],
+            "R&B",
+        ),
+        (
+            &[
+                "drum and bass",
+                "drum n bass",
+                "dubstep",
+                "synth pop",
+                "synthpop",
+                "electropop",
+                "indietronica",
+                "electronic",
+                "techno",
+                "house",
+                "trance",
+                "edm",
+                "ambient",
+            ],
+            "Electronic",
+        ),
+        (&["pop punk", "ska punk", "hardcore punk", "punk"], "Punk"),
+        (
+            &[
+                "metalcore",
+                "deathcore",
+                "death metal",
+                "black metal",
+                "heavy metal",
+                "thrash",
+                "doom metal",
+                "metal",
+            ],
+            "Metal",
+        ),
+        (
+            &[
+                "classic rock",
+                "hard rock",
+                "album rock",
+                "southern rock",
+                "blues rock",
+                "psychedelic rock",
+                "progressive rock",
+                "prog rock",
+                "folk rock",
+                "heartland",
+                "rock",
+            ],
+            "Rock",
+        ),
+        (&["dance pop", "teen pop", "k pop", "k-pop", "pop"], "Pop"),
+        (&["bluegrass", "americana", "outlaw country", "country"], "Country"),
+        (&["singer songwriter", "folk"], "Folk"),
+        (&["jazz"], "Jazz"),
+        (&["blues"], "Blues"),
+        (&["dancehall", "reggae", "dub"], "Reggae"),
+        (&["reggaeton", "latin"], "Latin"),
+        (&["classical", "orchestra"], "Classical"),
+    ];
+    for (needles, family) in RULES {
+        if needles.iter().any(|needle| phrase_has(&text, needle)) {
+            return Some((*family).to_string());
         }
-        let json: serde_json::Value = response.json().await.ok()?;
-        let artist = json.get("artists")?.get(0)?;
-        if artist.get("score")?.as_u64().unwrap_or(0) < 80 {
-            return None;
-        }
-        return artist
-            .get("id")
-            .and_then(|id| id.as_str())
-            .map(|id| id.to_string());
+    }
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if (1..=2).contains(&words.len()) && words.iter().all(|word| word.len() > 2) {
+        return Some(title_tag(&text));
     }
     None
 }
 
-async fn listenbrainz_artist_tags(
-    http: &reqwest::Client,
-    mbids: &[String],
-) -> HashMap<String, Vec<(String, u64)>> {
-    let mut tags_by_mbid = HashMap::new();
-    for chunk in mbids.chunks(40) {
-        let url = format!(
-            "https://api.listenbrainz.org/1/metadata/artist/?inc=tag&artist_mbids={}",
-            chunk.join(",")
-        );
-        let Ok(response) = http.get(&url).send().await else {
-            continue;
+fn family_slug(name: &str) -> String {
+    let mut slug = String::new();
+    let mut dash = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !slug.is_empty() {
+            slug.push('-');
+            dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn group_similar_songs(
+    nodes: &[String],
+    neighbors: &HashMap<String, Vec<(String, f64)>>,
+) -> Vec<Vec<String>> {
+    fn walk(
+        nodes: Vec<String>,
+        neighbors: &HashMap<String, Vec<(String, f64)>>,
+        depth: u8,
+    ) -> Vec<Vec<String>> {
+        if nodes.len() < 40 {
+            return Vec::new();
+        }
+        if nodes.len() <= 120 || depth > 4 || nodes.len() < 8 {
+            return vec![nodes];
+        }
+        let mut best: Option<Vec<Vec<String>>> = None;
+        let mut best_largest = nodes.len();
+        for gamma in [1.4, 2.2, 3.2] {
+            let parts = louvain_communities(&nodes, neighbors, gamma);
+            if parts.len() < 2 {
+                continue;
+            }
+            let largest = parts.iter().map(|part| part.len()).max().unwrap_or(0);
+            if largest + 15 < best_largest && parts.iter().any(|part| part.len() >= 40) {
+                best_largest = largest;
+                best = Some(parts);
+            }
+        }
+        let Some(parts) = best else {
+            return if nodes.len() <= 160 { vec![nodes] } else { Vec::new() };
         };
-        let Ok(json) = response.json::<serde_json::Value>().await else {
-            continue;
-        };
-        let Some(artists) = json.as_array() else {
-            continue;
-        };
-        for artist in artists {
-            let Some(mbid) = artist
-                .get("artist_mbid")
-                .and_then(|value| value.as_str())
-                .or_else(|| artist.get("mbid").and_then(|value| value.as_str()))
-            else {
+        let mut kept = Vec::new();
+        let mut smalls = Vec::new();
+        for part in parts {
+            if part.len() >= 40 {
+                kept.extend(walk(part, neighbors, depth + 1));
+            } else {
+                smalls.push(part);
+            }
+        }
+        if kept.is_empty() {
+            return if nodes.len() <= 160 { vec![nodes] } else { Vec::new() };
+        }
+        for part in smalls {
+            let mut best_index: Option<usize> = None;
+            let mut best_weight = 0.0;
+            for song in &part {
+                let Some(links) = neighbors.get(song) else {
+                    continue;
+                };
+                for (other, weight) in links {
+                    if let Some(index) = kept.iter().position(|group| group.iter().any(|id| id == other)) {
+                        if *weight > best_weight {
+                            best_weight = *weight;
+                            best_index = Some(index);
+                        }
+                    }
+                }
+            }
+            if let Some(index) = best_index {
+                kept[index].extend(part);
+            }
+        }
+        kept
+    }
+    walk(nodes.to_vec(), neighbors, 0)
+        .into_iter()
+        .filter(|group| group.len() >= 40)
+        .collect()
+}
+
+async fn audiomuse_neighbors(
+    state: &AppState,
+    base: &str,
+    auth: &NdAuth,
+    ids: &[String],
+    library: &HashSet<String>,
+) -> HashMap<String, Vec<(String, f64)>> {
+    let mut neighbors: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+    for chunk in ids.chunks(6) {
+        let mut jobs = Vec::new();
+        for id in chunk {
+            let state = state.clone();
+            let base = base.to_string();
+            let auth = auth.clone();
+            let id = id.clone();
+            jobs.push(tokio::spawn(async move {
+                let mut params = nd_params(&auth);
+                params.push(("id".into(), id.clone()));
+                params.push(("count".into(), "12".into()));
+                let found = match subsonic_get(&state, &base, "getSimilarSongs2.view", params).await {
+                    Ok(json) => json_items(&json["subsonic-response"]["similarSongs2"]["song"])
+                        .iter()
+                        .map(|song| json_str(&song["id"]))
+                        .filter(|song_id| !song_id.is_empty())
+                        .collect::<Vec<_>>(),
+                    Err(err) => {
+                        log_ha(&format!("audiomuse similar failed for {id}: {err}"));
+                        Vec::new()
+                    }
+                };
+                (id, found)
+            }));
+        }
+        for job in jobs {
+            let Ok((id, found)) = job.await else {
                 continue;
             };
-            let Some(tags) = artist.pointer("/tag/artist").and_then(|value| value.as_array()) else {
-                continue;
-            };
-            let mut parsed: Vec<(String, u64)> = tags
-                .iter()
-                .filter_map(|tag| {
-                    let name = clean_tag(tag.get("tag")?.as_str()?)?;
-                    let count = tag.get("count").and_then(|value| value.as_u64()).unwrap_or(1);
-                    Some((name, count))
-                })
-                .collect();
-            parsed.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(&right.0)));
-            parsed.truncate(12);
-            if !parsed.is_empty() {
-                tags_by_mbid.insert(mbid.to_string(), parsed);
+            for (rank, other) in found.into_iter().enumerate() {
+                if other == id || !library.contains(&other) {
+                    continue;
+                }
+                let weight = (1.0 - rank as f64 * 0.06).max(0.4);
+                let list = neighbors.entry(id.clone()).or_default();
+                if !list.iter().any(|(name, _)| name == &other) {
+                    list.push((other.clone(), weight));
+                }
+                let back = neighbors.entry(other.clone()).or_default();
+                if !back.iter().any(|(name, _)| name == &id) {
+                    back.push((id.clone(), weight));
+                }
             }
         }
     }
-    tags_by_mbid
+    neighbors.retain(|_, links| !links.is_empty());
+    neighbors
 }
+
 
 fn init_db(path: &str) -> Connection {
     let conn = Connection::open(path).expect("Failed to open SQLite DB");
@@ -1538,6 +1418,7 @@ fn subsonic_failure(json: &serde_json::Value) -> Option<String> {
     None
 }
 
+#[derive(Clone)]
 struct NdAuth {
     user: String,
     token: String,
@@ -1852,20 +1733,13 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
 
     let mut artist_nd_ids: HashMap<String, String> = HashMap::new();
-    let mut file_genres: HashMap<String, Vec<String>> = HashMap::new();
     for track in &all_tracks {
         let artist_key = track.2.to_lowercase();
         if !track.3.is_empty() {
-            artist_nd_ids.entry(artist_key.clone()).or_insert_with(|| track.3.clone());
-        }
-        if !track.5.trim().is_empty() {
-            file_genres.entry(artist_key).or_default().push(track.5.clone());
+            artist_nd_ids.entry(artist_key).or_insert_with(|| track.3.clone());
         }
     }
-
-    let mut artist_mbids: HashMap<String, String> = HashMap::new();
     let mut similarity_pairs: Vec<(String, String)> = Vec::new();
-    let mut similar_ranked: Vec<(String, String, f64)> = Vec::new();
     for (artist_key, artist_id) in &artist_nd_ids {
         let mut params = nd_params(&auth);
         params.push(("id".into(), artist_id.clone()));
@@ -1874,93 +1748,103 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             continue;
         };
         let info = &json["subsonic-response"]["artistInfo2"];
-        let mbid = json_str(&info["musicBrainzId"]);
-        if !mbid.is_empty() {
-            artist_mbids.insert(artist_key.clone(), mbid);
-        }
         if let Some(similar) = info["similarArtist"].as_array() {
-            for (rank, artist) in similar.iter().enumerate() {
+            for artist in similar {
                 if let Some(name) = artist["name"].as_str() {
                     let other = name.to_lowercase();
-                    let weight = (1.0 - rank as f64 * 0.06).max(0.45);
-                    similarity_pairs.push((artist_key.clone(), other.clone()));
-                    similar_ranked.push((artist_key.clone(), other, weight));
+                    if other != *artist_key {
+                        similarity_pairs.push((artist_key.clone(), other));
+                    }
                 }
             }
         }
     }
+    log_ha(&format!("similar artists: {} links", similarity_pairs.len()));
 
-    let mut missing_names: Vec<String> = Vec::new();
-    for (artist_key, _) in &artist_nd_ids {
-        if !artist_mbids.contains_key(artist_key) && !missing_names.contains(artist_key) {
-            missing_names.push(artist_key.clone());
-        }
-    }
+    let track_ids: Vec<String> = all_tracks.iter().map(|track| track.0.clone()).collect();
+    let library: HashSet<String> = track_ids.iter().cloned().collect();
+    let song_neighbors = audiomuse_neighbors(state, &cfg.navidrome_url, &auth, &track_ids, &library).await;
     log_ha(&format!(
-        "style lookup: {} artists, {} already have a MusicBrainz id, {} need a search",
-        artist_nd_ids.len().max(file_genres.len()),
-        artist_mbids.len(),
-        missing_names.len()
-    ));
-    for name in &missing_names {
-        tokio::time::sleep(Duration::from_millis(1100)).await;
-        if let Some(mbid) = musicbrainz_artist_mbid(&state.http, name).await {
-            artist_mbids.insert(name.clone(), mbid);
-        }
-    }
-
-    let mbids: Vec<String> = artist_mbids.values().cloned().collect::<HashSet<_>>().into_iter().collect();
-    let mbid_tags = listenbrainz_artist_tags(&state.http, &mbids).await;
-    let mut tags_by_artist: HashMap<String, Vec<String>> = HashMap::new();
-    for (artist_key, mbid) in &artist_mbids {
-        if let Some(tags) = mbid_tags.get(mbid) {
-            tags_by_artist.insert(artist_key.clone(), tags.iter().map(|(tag, _)| tag.clone()).collect());
-        }
-    }
-    log_ha(&format!(
-        "graph: {} artists, {} with listener tags, {} similarity links",
-        artist_nd_ids.len(),
-        tags_by_artist.len(),
-        similar_ranked.len()
+        "audiomuse similar songs: {} tracks have matches",
+        song_neighbors.len()
     ));
 
-    let mut tracks_by_artist: HashMap<String, Vec<String>> = HashMap::new();
-    let mut artist_display: HashMap<String, String> = HashMap::new();
-    let mut artist_cover: HashMap<String, String> = HashMap::new();
+    let mut family_of: HashMap<String, String> = HashMap::new();
     for track in &all_tracks {
-        let key = track.2.to_lowercase();
-        tracks_by_artist.entry(key.clone()).or_default().push(track.0.clone());
-        artist_display.entry(key.clone()).or_insert_with(|| track.2.clone());
-        artist_cover.entry(key).or_insert_with(|| track.8.clone());
+        if let Some(family) = main_family(&track.5) {
+            family_of.insert(track.0.clone(), family);
+        }
     }
-    let artist_nodes: Vec<String> = tracks_by_artist.keys().cloned().collect();
-    let sound_clusters = build_sound_clusters(
-        &artist_nodes,
-        &tracks_by_artist,
-        &tags_by_artist,
-        &similar_ranked,
-        &artist_cover,
-        &artist_display,
-    );
-    let mut cluster_of_track: HashMap<String, String> = HashMap::new();
-    for cluster in &sound_clusters {
-        for id in cluster.core_tracks.iter().chain(cluster.fringe_tracks.iter()) {
-            cluster_of_track.insert(id.clone(), cluster.id.clone());
+
+    let mut genre_members: HashMap<String, Vec<String>> = HashMap::new();
+    if song_neighbors.len() * 5 >= all_tracks.len().max(1) {
+        let mut connected = HashSet::new();
+        for (id, links) in &song_neighbors {
+            connected.insert(id.clone());
+            for (other, _) in links {
+                connected.insert(other.clone());
+            }
+        }
+        let nodes: Vec<String> = connected.into_iter().collect();
+        for group in group_similar_songs(&nodes, &song_neighbors) {
+            let mut votes: HashMap<String, usize> = HashMap::new();
+            for id in &group {
+                if let Some(family) = family_of.get(id) {
+                    *votes.entry(family.clone()).or_default() += 1;
+                }
+            }
+            let name = votes
+                .into_iter()
+                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+                .map(|(name, _)| name)
+                .unwrap_or_else(|| "Mix".to_string());
+            genre_members.entry(name).or_default().extend(group);
+        }
+    } else {
+        log_ha("audiomuse returned too few similar songs, genre stations use the main tag");
+        for (id, family) in &family_of {
+            genre_members.entry(family.clone()).or_default().push(id.clone());
+        }
+    }
+
+    let mut placed_ids: HashSet<String> = HashSet::new();
+    for ids in genre_members.values() {
+        placed_ids.extend(ids.iter().cloned());
+    }
+    let mut loose: HashMap<String, Vec<String>> = HashMap::new();
+    for track in &all_tracks {
+        if placed_ids.contains(&track.0) {
+            continue;
+        }
+        if let Some(family) = family_of.get(&track.0) {
+            loose.entry(family.clone()).or_default().push(track.0.clone());
+        }
+    }
+    for (family, ids) in loose {
+        if genre_members.contains_key(&family) || ids.len() >= 40 {
+            genre_members.entry(family).or_default().extend(ids);
+        }
+    }
+    genre_members.retain(|_, ids| ids.len() >= 40);
+    for ids in genre_members.values_mut() {
+        ids.sort();
+        ids.dedup();
+    }
+
+    let mut genre_of_track: HashMap<String, String> = HashMap::new();
+    for (family, ids) in &genre_members {
+        let station_id = format!("genre-{}", family_slug(family));
+        for id in ids {
+            genre_of_track.insert(id.clone(), station_id.clone());
         }
     }
     for track in &mut all_tracks {
-        track.6 = cluster_of_track.get(&track.0).cloned().unwrap_or_default();
+        track.6 = genre_of_track.get(&track.0).cloned().unwrap_or_default();
     }
-    log_ha(&format!(
-        "clusters={} placed={}",
-        sound_clusters.len(),
-        cluster_of_track.len()
-    ));
 
     let conn = state.db.lock().unwrap();
     conn.execute("DELETE FROM tracks", []).unwrap();
     conn.execute("DELETE FROM similar_artists", []).unwrap();
-    // Preserve is_favorite state across rescans by mapping existing favorites
     let mut existing_favorites: HashSet<String> = HashSet::new();
     if let Ok(mut stmt) = conn.prepare("SELECT id FROM stations WHERE is_favorite = 1") {
         if let Ok(rows) = stmt.query_map([], |row| row.get(0)) {
@@ -1978,26 +1862,6 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
     }
 
-    let mut genre_buckets: HashMap<String, StationBucket> = HashMap::new();
-    let mut track_broad: HashMap<String, String> = HashMap::new();
-    for cluster in &sound_clusters {
-        let mut ids = cluster.core_tracks.clone();
-        ids.extend(cluster.fringe_tracks.iter().cloned());
-        for id in &ids {
-            track_broad.insert(id.clone(), cluster.id.clone());
-        }
-        genre_buckets.insert(
-            cluster.id.clone(),
-            StationBucket {
-                label: cluster.name.clone(),
-                family: cluster.id.clone(),
-                track_ids: ids,
-                cover: cluster.cover.clone(),
-                style_labels: HashSet::new(),
-            },
-        );
-    }
-
     let mut stations_built = 0;
     let mut placed = 0usize;
     for track in &all_tracks {
@@ -2008,91 +1872,37 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         );
     }
 
-    for cluster in &sound_clusters {
-        let description = if cluster.fringe_tracks.is_empty() {
-            format!("{} songs from artists listeners group together", cluster.core_tracks.len())
-        } else {
-            format!(
-                "{} core songs, {} from artists on the edge of this sound",
-                cluster.core_tracks.len(),
-                cluster.fringe_tracks.len()
-            )
-        };
-        let is_fav = if existing_favorites.contains(&cluster.id) { 1 } else { 0 };
-        let _ = conn.execute(
-            "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                cluster.id,
-                cluster.name,
-                "Genre Stations",
-                description,
-                serde_json::to_string(&cluster.core_tracks).unwrap(),
-                serde_json::to_string(&cluster.fringe_tracks).unwrap(),
-                cluster.cover,
-                is_fav
-            ],
-        );
-        placed += cluster.core_tracks.len() + cluster.fringe_tracks.len();
-        stations_built += 1;
-        log_ha(&format!(
-            "cluster {} core={} fringe={}",
-            cluster.name,
-            cluster.core_tracks.len(),
-            cluster.fringe_tracks.len()
-        ));
-    }
-
-    let mut left_out: Vec<String> = Vec::new();
-    let mut left_artists: HashMap<String, usize> = HashMap::new();
-    for track in &all_tracks {
-        if cluster_of_track.contains_key(&track.0) {
-            continue;
-        }
-        left_out.push(track.0.clone());
-        *left_artists.entry(track.2.clone()).or_default() += 1;
-    }
-    if !left_out.is_empty() {
-        let mut artists: Vec<(String, usize)> = left_artists.into_iter().collect();
-        artists.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-        let shown = artists
-            .iter()
-            .take(12)
-            .map(|(name, count)| format!("{name} ({count})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        log_ha(&format!(
-            "not in a station: {} songs, {} artists. largest: {shown}",
-            left_out.len(),
-            artists.len()
-        ));
+    let mut genre_names: Vec<String> = genre_members.keys().cloned().collect();
+    genre_names.sort();
+    for family in genre_names {
+        let ids = genre_members.get(&family).cloned().unwrap_or_default();
+        let station_id = format!("genre-{}", family_slug(&family));
         let cover = all_tracks
             .iter()
-            .find(|track| left_out.iter().any(|id| id == &track.0))
+            .find(|track| ids.iter().any(|id| id == &track.0))
             .map(|track| track.8.clone())
             .unwrap_or_default();
-        let is_fav = if existing_favorites.contains("unsorted") { 1 } else { 0 };
+        let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                "unsorted",
-                "Not in a Station",
-                "Unsorted",
-                format!(
-                    "{} songs the scan could not group with similar artists",
-                    left_out.len()
-                ),
-                serde_json::to_string(&left_out).unwrap(),
+                station_id,
+                family,
+                "Genre Stations",
+                format!("{} songs", ids.len()),
+                serde_json::to_string(&ids).unwrap(),
                 "[]",
                 cover,
                 is_fav
             ],
         );
+        placed += ids.len();
         stations_built += 1;
+        log_ha(&format!("genre station {family} songs={}", ids.len()));
     }
 
-    let mut decade_buckets: HashMap<String, StationBucket> = HashMap::new();
+    let mut era_buckets: HashMap<String, (String, Vec<String>, String)> = HashMap::new();
     for track in &all_tracks {
         let Some(year) = track_years.get(&track.0).copied() else {
             continue;
@@ -2100,49 +1910,41 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let Some(decade) = decade_label(year) else {
             continue;
         };
-        let Some(broad) = track_broad.get(&track.0) else {
+        let Some(family) = family_of.get(&track.0) else {
             continue;
         };
-        let Some(genre) = genre_buckets.get(broad) else {
-            continue;
-        };
-        let key = format!("{decade}-{broad}");
-        let bucket = decade_buckets.entry(key).or_insert_with(|| StationBucket {
-            label: format!("{decade} {}", genre.label),
-            family: broad.clone(),
-            track_ids: Vec::new(),
-            cover: track.8.clone(),
-            style_labels: HashSet::new(),
+        let key = format!("{decade}-{}", family_slug(family));
+        let entry = era_buckets.entry(key).or_insert_with(|| {
+            (format!("{decade} {family}"), Vec::new(), track.8.clone())
         });
-        bucket.track_ids.push(track.0.clone());
+        entry.1.push(track.0.clone());
     }
-    for (key, bucket) in &decade_buckets {
-        if bucket.track_ids.len() < 25 {
-            log_ha(&format!(
-                "decade skipped {} ({} songs)",
-                bucket.label,
-                bucket.track_ids.len()
-            ));
+    let mut era_keys: Vec<String> = era_buckets.keys().cloned().collect();
+    era_keys.sort();
+    for key in era_keys {
+        let (label, ids, cover) = era_buckets.get(&key).cloned().expect("era key");
+        if ids.len() < 30 {
+            log_ha(&format!("era skipped {label} ({} songs)", ids.len()));
             continue;
         }
-        let st_id = format!("decade-{key}");
-        let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
+        let station_id = format!("era-{key}");
+        let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                st_id,
-                bucket.label,
-                "Decade Stations",
-                format!("{} songs from that decade", bucket.track_ids.len()),
-                serde_json::to_string(&bucket.track_ids).unwrap(),
+                station_id,
+                label,
+                "Era Stations",
+                format!("{} songs", ids.len()),
+                serde_json::to_string(&ids).unwrap(),
                 "[]",
-                bucket.cover,
+                cover,
                 is_fav
             ],
         );
         stations_built += 1;
-        log_ha(&format!("decade station {} songs={}", bucket.label, bucket.track_ids.len()));
+        log_ha(&format!("era station {label} songs={}", ids.len()));
     }
 
     let mut by_artist: HashMap<String, Vec<String>> = HashMap::new();
@@ -2477,7 +2279,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.32 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.33 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2524,7 +2326,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.32 listening admin={ingress_port} public={public_port}"
+        "version 0.2.33 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
