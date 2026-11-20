@@ -288,13 +288,13 @@ fn collect_groups(
     groups
 }
 
-fn sound_station_name(
+fn sound_station_names(
     ids: &[String],
     tag_of: &HashMap<String, String>,
     artist_of: &HashMap<String, String>,
     library_tag_counts: &HashMap<String, usize>,
     library_size: usize,
-) -> String {
+) -> Vec<String> {
     let mut songs: HashMap<String, usize> = HashMap::new();
     let mut artists: HashMap<String, HashSet<String>> = HashMap::new();
     for id in ids {
@@ -332,18 +332,26 @@ fn sound_station_name(
             .then(left.2.len().cmp(&right.2.len()))
             .then(left.2.cmp(&right.2))
     });
-    // The tag on the most files in the library, usually Rock, does not get to name
-    // a group when that group also has a style of its own.
+    let mut names = Vec::new();
     if let Some(top) = library_top {
-        if let Some((_, _, tag)) = ranked.iter().find(|(_, _, tag)| tag != &top) {
-            return tag.clone();
+        for (_, _, tag) in &ranked {
+            if tag != &top && !names.contains(tag) {
+                names.push(tag.clone());
+            }
+        }
+        for (_, _, tag) in &ranked {
+            if tag == &top && !names.contains(tag) {
+                names.push(tag.clone());
+            }
+        }
+    } else {
+        for (_, _, tag) in ranked {
+            if !names.contains(&tag) {
+                names.push(tag);
+            }
         }
     }
-    ranked
-        .into_iter()
-        .next()
-        .map(|(_, _, tag)| tag)
-        .unwrap_or_else(|| "Mix".to_string())
+    names
 }
 
 fn decade_label(year: u16) -> Option<&'static str> {
@@ -1829,25 +1837,25 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let mut sound_stations: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut used_station_ids: HashSet<String> = HashSet::new();
     let mut placed_ids: HashSet<String> = HashSet::new();
+    let mut used_names: HashSet<String> = HashSet::new();
     for mut ids in pending {
         ids.sort();
         ids.dedup();
-        let name = sound_station_name(
+        let candidates = sound_station_names(
             &ids,
             &tag_of,
             &artist_of,
             &library_tag_counts,
             library.len(),
         );
-        // AudioMuse does not name the station. A shared style tag does.
-        // "Mix" means the group had no shared style, so it is not a genre station.
-        if name == "Mix" {
+        let Some(name) = candidates.into_iter().find(|name| !used_names.contains(name)) else {
             log_ha(&format!(
-                "sound group has no shared style ({} songs), left for Other",
+                "sound group left off the list ({} songs). Its only name is already a station.",
                 ids.len()
             ));
             continue;
-        }
+        };
+        used_names.insert(name.clone());
         let slug = {
             let raw = family_slug(&name);
             if raw.is_empty() { "mix".to_string() } else { raw }
@@ -2307,7 +2315,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.39 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.40 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2354,7 +2362,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.39 listening admin={ingress_port} public={public_port}"
+        "version 0.2.40 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

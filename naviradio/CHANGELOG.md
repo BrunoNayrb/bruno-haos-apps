@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.40
+
+- Two sound groups can no longer both be named Rock. The second group uses another style if it has one. If Rock is its only name, those songs go to Other instead of a second Rock station.
+
 ## 0.2.39
 
 - A sound group stops growing at 80 songs. Similar-song links were chaining until one station held the library and the most common tag, Rock, named it.
