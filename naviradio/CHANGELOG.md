@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.36
+
+- An era station is one decade and the style on the files, such as "90s Rock" or "2000s Hip Hop". Decades are not joined into a range like "80s–2020s Rock".
+- A decade with fewer than 20 songs of that style does not get its own era station. Those songs stay on the genre station.
+
 ## 0.2.35
 
 - The style list is gone. A station is named with the tag written on the files, and it only exists when that tag is on at least 20 songs.

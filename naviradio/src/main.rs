@@ -1659,51 +1659,17 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     for family in families {
         let mut slices = by_family.remove(&family).unwrap_or_default();
         slices.sort_by_key(|slice| slice.0);
-        let mut packs: Vec<Vec<(u16, String, Vec<String>, String)>> = Vec::new();
-        let mut current: Vec<(u16, String, Vec<String>, String)> = Vec::new();
-        let mut count = 0usize;
-        for slice in slices {
-            if count >= 80 && !current.is_empty() {
-                packs.push(std::mem::take(&mut current));
-                count = 0;
-            }
-            count += slice.2.len();
-            current.push(slice);
-        }
-        if !current.is_empty() {
-            if count < 40 {
-                if let Some(last) = packs.last_mut() {
-                    last.extend(current);
-                } else {
-                    log_ha(&format!("era skipped {family} ({count} songs)"));
-                }
-            } else {
-                packs.push(current);
-            }
-        }
-        for pack in packs {
-            let songs: usize = pack.iter().map(|slice| slice.2.len()).sum();
-            if songs < 40 {
-                log_ha(&format!("era skipped {family} ({songs} songs)"));
+        for (_year, decade, ids, cover) in slices {
+            // One decade, one station. Do not glue 80s through 2020s into a range.
+            if ids.len() < 20 {
+                log_ha(&format!(
+                    "era skipped {decade} {family} ({} songs)",
+                    ids.len()
+                ));
                 continue;
             }
-            let first = pack.first().map(|slice| slice.1.clone()).unwrap_or_default();
-            let last = pack.last().map(|slice| slice.1.clone()).unwrap_or_default();
-            let label = if first == last {
-                format!("{first} {family}")
-            } else {
-                format!("{first}–{last} {family}")
-            };
-            let mut ids = Vec::new();
-            for slice in &pack {
-                ids.extend(slice.2.iter().cloned());
-            }
-            let cover = pack
-                .iter()
-                .find(|slice| !slice.3.is_empty())
-                .map(|slice| slice.3.clone())
-                .unwrap_or_default();
-            let station_id = format!("era-{first}-{last}-{}", family_slug(&family));
+            let label = format!("{decade} {family}");
+            let station_id = format!("era-{decade}-{}", family_slug(&family));
             let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
             let _ = conn.execute(
                 "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
@@ -2056,7 +2022,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.35 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.36 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2103,7 +2069,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.35 listening admin={ingress_port} public={public_port}"
+        "version 0.2.36 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
