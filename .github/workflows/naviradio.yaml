@@ -23,9 +23,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Read addon version
+        id: version
+        run: |
+          version=$(grep '^version:' naviradio/config.yaml | head -1 | awk '{print $2}' | tr -d '"')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing $version"
       - name: Get build matrix
         id: matrix
         uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.09.0
@@ -56,14 +63,14 @@ jobs:
           context: naviradio
           image: ${{ matrix.image }}
           image-tags: |
-            0.2.32
+            ${{ needs.init.outputs.version }}
             latest
           push: true
-          version: "0.2.32"
+          version: ${{ needs.init.outputs.version }}
 
   manifest:
     name: Publish multi-arch manifest
-    needs: build
+    needs: [build, init]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -76,6 +83,6 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: |
-            0.2.32
+            ${{ needs.init.outputs.version }}
             latest
           registry-prefix: ${{ env.REGISTRY_PREFIX }}
