@@ -604,8 +604,8 @@
               <input type="number" id="cfgCooldown" min="1" max="25" />
             </div>
             <div class="field">
-              <label>Minimum songs for a genre station (at least 100)</label>
-              <input type="number" id="cfgMinTracks" min="100" max="1000" />
+              <label>Minimum songs for a genre or era station</label>
+              <input type="number" id="cfgMinTracks" min="1" max="1000" />
             </div>
             <div class="field">
               <label>Navidrome Libraries / Folders</label>
@@ -1554,7 +1554,7 @@
         selected_folders,
         fringe_percentage: parseInt(document.getElementById('cfgFringe').value || '25', 10),
         artist_cooldown: parseInt(document.getElementById('cfgCooldown').value || '6', 10),
-        min_station_tracks: parseInt(document.getElementById('cfgMinTracks').value || '100', 10)
+        min_station_tracks: parseInt(document.getElementById('cfgMinTracks').value || '10', 10)
       };
       await fetch('api/admin/config', {
         method: 'POST',

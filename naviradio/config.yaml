@@ -1,6 +1,6 @@
 name: "NaviRadio"
 description: "Standalone auto-generated endless radio stations powered by Navidrome"
-version: "0.2.36"
+version: "0.2.37"
 slug: "naviradio"
 init: false
 arch:
@@ -24,7 +24,7 @@ options:
   navidrome_admin_pass: ""
   fringe_percentage: 25
   artist_cooldown: 6
-  min_station_tracks: 100
+  min_station_tracks: 10
 schema:
   navidrome_url: str
   navidrome_admin_user: str

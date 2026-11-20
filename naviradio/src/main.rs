@@ -360,6 +360,35 @@ fn init_db(path: &str) -> Connection {
         ",
     )
     .expect("Failed to initialize database schema");
+    // 100 was the old clamp. The box could not be set lower, and the scan did not use it.
+    let migrated: String = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'min_tracks_floor_fixed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| "0".into());
+    if migrated != "1" {
+        let current: String = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'min_station_tracks'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "100".into());
+        if current == "100" || current.is_empty() {
+            let _ = conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('min_station_tracks', '10')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            );
+        }
+        let _ = conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('min_tracks_floor_fixed', '1')
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [],
+        );
+    }
     conn
 }
 
@@ -376,7 +405,7 @@ fn load_config(conn: &Connection) -> AppConfig {
     let def_pass = env::var("DEFAULT_ND_PASS").unwrap_or_default();
     let def_fringe = env::var("DEFAULT_FRINGE").unwrap_or_else(|_| "25".into());
     let def_cool = env::var("DEFAULT_COOLDOWN").unwrap_or_else(|_| "6".into());
-    let def_min = env::var("DEFAULT_MIN_TRACKS").unwrap_or_else(|_| "100".into());
+    let def_min = env::var("DEFAULT_MIN_TRACKS").unwrap_or_else(|_| "10".into());
 
     let folders_raw = get_val("selected_folders", "[]");
     let selected_folders: Vec<String> = serde_json::from_str(&folders_raw).unwrap_or_default();
@@ -391,8 +420,8 @@ fn load_config(conn: &Connection) -> AppConfig {
         artist_cooldown: get_val("artist_cooldown", &def_cool).parse().unwrap_or(6),
         min_station_tracks: get_val("min_station_tracks", &def_min)
             .parse::<usize>()
-            .unwrap_or(100)
-            .max(100),
+            .unwrap_or(10)
+            .clamp(1, 1000),
     }
 }
 
@@ -1552,7 +1581,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     for (id, family) in &family_of {
         genre_members.entry(family.clone()).or_default().push(id.clone());
     }
-    genre_members.retain(|_, ids| ids.len() >= 20);
+    genre_members.retain(|_, ids| ids.len() >= cfg.min_station_tracks);
     for ids in genre_members.values_mut() {
         ids.sort();
         ids.dedup();
@@ -1629,6 +1658,46 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         log_ha(&format!("genre station {family} songs={}", ids.len()));
     }
 
+    let mut placed_ids: HashSet<String> = HashSet::new();
+    for ids in genre_members.values() {
+        for id in ids {
+            placed_ids.insert(id.clone());
+        }
+    }
+    let mut other: Vec<String> = all_tracks
+        .iter()
+        .map(|track| track.0.clone())
+        .filter(|id| !placed_ids.contains(id))
+        .collect();
+    other.sort();
+    other.dedup();
+    if !other.is_empty() {
+        let station_id = "genre-other";
+        let cover = all_tracks
+            .iter()
+            .find(|track| other.iter().any(|id| id == &track.0) && !track.8.is_empty())
+            .map(|track| track.8.clone())
+            .unwrap_or_default();
+        let is_fav = if existing_favorites.contains(station_id) { 1 } else { 0 };
+        let _ = conn.execute(
+            "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                station_id,
+                "Other",
+                "Genre Stations",
+                format!("{} songs", other.len()),
+                serde_json::to_string(&other).unwrap(),
+                "[]",
+                cover,
+                is_fav
+            ],
+        );
+        placed += other.len();
+        stations_built += 1;
+        log_ha(&format!("genre station Other songs={}", other.len()));
+    }
+
     let mut era_buckets: HashMap<(String, String), (String, Vec<String>, String)> = HashMap::new();
     for track in &all_tracks {
         let Some(year) = track_years.get(&track.0).copied() else {
@@ -1661,7 +1730,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         slices.sort_by_key(|slice| slice.0);
         for (_year, decade, ids, cover) in slices {
             // One decade, one station. Do not glue 80s through 2020s into a range.
-            if ids.len() < 20 {
+            if ids.len() < cfg.min_station_tracks {
                 log_ha(&format!(
                     "era skipped {decade} {family} ({} songs)",
                     ids.len()
@@ -2022,7 +2091,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.36 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.37 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2069,7 +2138,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.36 listening admin={ingress_port} public={public_port}"
+        "version 0.2.37 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

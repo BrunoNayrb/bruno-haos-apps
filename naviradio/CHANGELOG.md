@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.37
+
+- The minimum-songs box now sets how many songs a tag needs before it becomes a genre station or an era station. It was locked at 100, and the scan did not use it.
+- That floor starts at 10. A tag with fewer songs than the floor, and any song with no usable tag, is put on the Other station instead of being left out.
+
 ## 0.2.36
 
 - An era station is one decade and the style on the files, such as "90s Rock" or "2000s Hip Hop". Decades are not joined into a range like "80s–2020s Rock".
