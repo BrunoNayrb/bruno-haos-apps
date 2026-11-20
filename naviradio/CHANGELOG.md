@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.38
+
+- Genre, era, and artist stations are built from AudioMuse similar songs. The tag on the file does not decide the group, and Last.fm is not asked.
+- The station name is a style tag that more than one artist in that sound group actually shares. AudioMuse's own playlist titles are not used. A glued-together tag such as "Alternative en Indie" is not a name.
+- One artist does not get a genre station. Songs AudioMuse cannot match stay on Other.
+
 ## 0.2.37
 
 - The minimum-songs box now sets how many songs a tag needs before it becomes a genre station or an era station. It was locked at 100, and the scan did not use it.
