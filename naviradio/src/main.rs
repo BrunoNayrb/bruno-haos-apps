@@ -241,162 +241,6 @@ fn decade_index(label: &str) -> u16 {
     }
 }
 
-fn phrase_has(text: &str, needle: &str) -> bool {
-    format!(" {text} ").contains(&format!(" {needle} "))
-}
-
-/// Map a file genre to a short style. Specific tags win over the bare word,
-/// so "Alternative en Indie" is Indie and "Nu Metal" is Metal.
-fn main_family(raw: &str) -> Option<String> {
-    let text = clean_tag(raw)?;
-    const RULES: &[(&[&str], &str)] = &[
-        (
-            &[
-                "alternative hip hop",
-                "east coast hip hop",
-                "west coast hip hop",
-                "hip hop",
-                "hiphop",
-                "g funk",
-                "gangsta",
-                "boom bap",
-                "trap",
-                "drill",
-                "phonk",
-                "rap",
-            ],
-            "Hip-Hop",
-        ),
-        (
-            &[
-                "alternative metal",
-                "industrial metal",
-                "nu metal",
-                "rap metal",
-                "metalcore",
-                "deathcore",
-                "death metal",
-                "black metal",
-                "heavy metal",
-                "doom metal",
-                "thrash",
-                "metal",
-            ],
-            "Metal",
-        ),
-        (
-            &[
-                "pop punk",
-                "punk rock",
-                "ska punk",
-                "hardcore punk",
-                "alternative punk",
-                "post punk",
-                "hardcore",
-                "punk",
-            ],
-            "Punk",
-        ),
-        (
-            &[
-                "alternative en indie",
-                "indie rock",
-                "indie pop",
-                "indie folk",
-                "indie",
-            ],
-            "Indie",
-        ),
-        (
-            &[
-                "alternative rock",
-                "alt rock",
-                "grunge",
-                "britpop",
-                "shoegaze",
-                "emo",
-                "alternative",
-            ],
-            "Alternative Rock",
-        ),
-        (
-            &[
-                "drum and bass",
-                "drum n bass",
-                "dubstep",
-                "electropop",
-                "indietronica",
-                "electronic",
-                "industrial",
-                "techno",
-                "house",
-                "trance",
-                "edm",
-                "ambient",
-            ],
-            "Electronic",
-        ),
-        (
-            &["rhythm and blues", "r&b", "rnb", "neo soul", "soul", "funk"],
-            "R&B",
-        ),
-        (
-            &[
-                "alternative pop",
-                "power pop",
-                "dance pop",
-                "synth pop",
-                "synthpop",
-                "dream pop",
-                "teen pop",
-                "k pop",
-                "k-pop",
-                "pop rock",
-                "pop",
-            ],
-            "Pop",
-        ),
-        (
-            &[
-                "swamp rock",
-                "stoner rock",
-                "christian rock",
-                "classic rock",
-                "hard rock",
-                "album rock",
-                "southern rock",
-                "blues rock",
-                "psychedelic rock",
-                "progressive rock",
-                "prog rock",
-                "folk rock",
-                "crossover rock",
-                "heartland",
-                "rock",
-            ],
-            "Rock",
-        ),
-        (&["bluegrass", "americana", "outlaw country", "country"], "Country"),
-        (&["singer songwriter", "folk"], "Folk"),
-        (&["jazz"], "Jazz"),
-        (&["blues"], "Blues"),
-        (&["dancehall", "reggae", "dub"], "Reggae"),
-        (&["reggaeton", "latin"], "Latin"),
-        (&["classical", "orchestra", "string quartet"], "Classical"),
-    ];
-    for (needles, family) in RULES {
-        if needles.iter().any(|needle| phrase_has(&text, needle)) {
-            return Some((*family).to_string());
-        }
-    }
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if (1..=2).contains(&words.len()) && words.iter().all(|word| word.chars().all(|ch| ch.is_alphabetic()) && word.len() > 2)
-    {
-        return Some(title_tag(&text));
-    }
-    None
-}
-
 fn family_slug(name: &str) -> String {
     let mut slug = String::new();
     let mut dash = false;
@@ -1667,8 +1511,8 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let mut family_of: HashMap<String, String> = HashMap::new();
     let mut untagged: Vec<String> = Vec::new();
     for track in &all_tracks {
-        if let Some(family) = main_family(&track.5) {
-            family_of.insert(track.0.clone(), family);
+        if let Some(tag) = clean_tag(&track.5) {
+            family_of.insert(track.0.clone(), title_tag(&tag));
         } else {
             untagged.push(track.0.clone());
         }
@@ -1708,7 +1552,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     for (id, family) in &family_of {
         genre_members.entry(family.clone()).or_default().push(id.clone());
     }
-    genre_members.retain(|_, ids| ids.len() >= 40);
+    genre_members.retain(|_, ids| ids.len() >= 20);
     for ids in genre_members.values_mut() {
         ids.sort();
         ids.dedup();
@@ -2212,7 +2056,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.34 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.35 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2259,7 +2103,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.34 listening admin={ingress_port} public={public_port}"
+        "version 0.2.35 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

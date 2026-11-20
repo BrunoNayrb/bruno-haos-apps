@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.35
+
+- The style list is gone. A station is named with the tag written on the files, and it only exists when that tag is on at least 20 songs.
+- A song is not moved into another style because the tag contains a word like "alternative." AudioMuse is used only for songs that have no tag.
+- Era stations use that same file tag. Short decade slices of one tag are combined. A tag with fewer than 40 songs does not get an era station.
+
+
 ## 0.2.34
 
 - A song stays in the style on its file. AudioMuse is only used when that tag is missing. One similar-song group can no longer rename the whole library to Alternative.
