@@ -1,12 +1,12 @@
 name: Soulbeet Bulk
-version: 0.1.27
+version: 0.1.28
 slug: soulbeet_bulk_v2
 description: >-
   Home Assistant package of Soulbeet by Terry Raimondo (terry90/soulbeet).
   Builds from the fork BrunoNayrb/soulbeet, which adds CSV import.
   Beets databases stay on local storage so imports do not lock on a network share.
 url: https://github.com/terry90/soulbeet
-image: ghcr.io/brunonayrb/soulbeet-bulk
+image: ghcr.io/brunonayrb/soulbeet-bulk-ha
 arch:
   - amd64
 ports:

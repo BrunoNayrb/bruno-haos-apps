@@ -37,8 +37,8 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            ghcr.io/brunonayrb/soulbeet-bulk:${{ steps.version.outputs.version }}
-            ghcr.io/brunonayrb/soulbeet-bulk:latest
+            ghcr.io/brunonayrb/soulbeet-bulk-ha:${{ steps.version.outputs.version }}
+            ghcr.io/brunonayrb/soulbeet-bulk-ha:latest
           build-args: |
             CACHEBUST=${{ github.sha }}
             BUILD_VERSION=${{ steps.version.outputs.version }}
