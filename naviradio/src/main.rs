@@ -213,84 +213,6 @@ fn title_tag(tag: &str) -> String {
     }
 }
 
-fn louvain_communities(
-    nodes: &[String],
-    neighbors: &HashMap<String, Vec<(String, f64)>>,
-    gamma: f64,
-) -> Vec<Vec<String>> {
-    if nodes.is_empty() {
-        return Vec::new();
-    }
-    let node_set: HashSet<&str> = nodes.iter().map(|name| name.as_str()).collect();
-    let mut local: HashMap<String, Vec<(String, f64)>> = HashMap::new();
-    let mut degree: HashMap<String, f64> = HashMap::new();
-    let mut two_m = 0.0;
-    for node in nodes {
-        let mut links = Vec::new();
-        if let Some(all) = neighbors.get(node) {
-            for (other, weight) in all {
-                if other != node && *weight > 0.0 && node_set.contains(other.as_str()) {
-                    links.push((other.clone(), *weight));
-                    *degree.entry(node.clone()).or_default() += *weight;
-                    two_m += *weight;
-                }
-            }
-        }
-        local.insert(node.clone(), links);
-        degree.entry(node.clone()).or_default();
-    }
-    if two_m <= 0.0 {
-        return nodes.iter().cloned().map(|name| vec![name]).collect();
-    }
-    let mut comm: HashMap<String, usize> = HashMap::new();
-    let mut comm_tot: HashMap<usize, f64> = HashMap::new();
-    for (index, node) in nodes.iter().enumerate() {
-        comm.insert(node.clone(), index);
-        comm_tot.insert(index, degree[node]);
-    }
-    for _ in 0..25 {
-        let mut moved = false;
-        for node in nodes {
-            let current = comm[node];
-            let ki = degree[node];
-            let mut to_comm: HashMap<usize, f64> = HashMap::new();
-            for (other, weight) in &local[node] {
-                *to_comm.entry(comm[other]).or_default() += *weight;
-            }
-            let kin_current = to_comm.get(&current).copied().unwrap_or(0.0);
-            let tot_current = comm_tot[&current];
-            let mut best = current;
-            let mut best_delta = 0.0;
-            for (target, kin_target) in &to_comm {
-                if *target == current {
-                    continue;
-                }
-                let tot_target = comm_tot[target];
-                let delta = (*kin_target - kin_current) / two_m
-                    - gamma * ki * (tot_target - tot_current + ki) / (two_m * two_m);
-                if delta > best_delta + 1e-9 {
-                    best_delta = delta;
-                    best = *target;
-                }
-            }
-            if best != current {
-                comm_tot.insert(current, tot_current - ki);
-                *comm_tot.entry(best).or_default() += ki;
-                comm.insert(node.clone(), best);
-                moved = true;
-            }
-        }
-        if !moved {
-            break;
-        }
-    }
-    let mut groups: HashMap<usize, Vec<String>> = HashMap::new();
-    for node in nodes {
-        groups.entry(comm[node]).or_default().push(node.clone());
-    }
-    groups.into_values().collect()
-}
-
 fn decade_label(year: u16) -> Option<&'static str> {
     Some(match year {
         1950..=1959 => "50s",
@@ -305,46 +227,39 @@ fn decade_label(year: u16) -> Option<&'static str> {
     })
 }
 
+fn decade_index(label: &str) -> u16 {
+    match label {
+        "50s" => 1950,
+        "60s" => 1960,
+        "70s" => 1970,
+        "80s" => 1980,
+        "90s" => 1990,
+        "2000s" => 2000,
+        "2010s" => 2010,
+        "2020s" => 2020,
+        _ => 0,
+    }
+}
+
 fn phrase_has(text: &str, needle: &str) -> bool {
     format!(" {text} ").contains(&format!(" {needle} "))
 }
 
-/// Collapse a file genre to a short parent. "Nu Metal" and "Alternative Rock"
-/// both become Alternative. A tag this table does not know stays itself when
-/// it is already one or two words, so a new style can still form a station.
+/// Map a file genre to a short style. Specific tags win over the bare word,
+/// so "Alternative en Indie" is Indie and "Nu Metal" is Metal.
 fn main_family(raw: &str) -> Option<String> {
     let text = clean_tag(raw)?;
     const RULES: &[(&[&str], &str)] = &[
         (
             &[
-                "nu metal",
-                "rap metal",
-                "alternative metal",
-                "post grunge",
-                "rap rock",
-                "alternative rock",
-                "alt rock",
-                "indie rock",
-                "indie folk",
-                "indie pop",
-                "grunge",
-                "britpop",
-                "shoegaze",
-                "dream pop",
-                "post punk",
-                "emo",
-                "alternative",
-                "indie",
-            ],
-            "Alternative",
-        ),
-        (
-            &[
+                "alternative hip hop",
+                "east coast hip hop",
+                "west coast hip hop",
                 "hip hop",
                 "hiphop",
+                "g funk",
                 "gangsta",
                 "boom bap",
-                "g funk",
                 "trap",
                 "drill",
                 "phonk",
@@ -353,19 +268,66 @@ fn main_family(raw: &str) -> Option<String> {
             "Hip-Hop",
         ),
         (
-            &["rhythm and blues", "r&b", "rnb", "neo soul", "soul", "funk"],
-            "R&B",
+            &[
+                "alternative metal",
+                "industrial metal",
+                "nu metal",
+                "rap metal",
+                "metalcore",
+                "deathcore",
+                "death metal",
+                "black metal",
+                "heavy metal",
+                "doom metal",
+                "thrash",
+                "metal",
+            ],
+            "Metal",
+        ),
+        (
+            &[
+                "pop punk",
+                "punk rock",
+                "ska punk",
+                "hardcore punk",
+                "alternative punk",
+                "post punk",
+                "hardcore",
+                "punk",
+            ],
+            "Punk",
+        ),
+        (
+            &[
+                "alternative en indie",
+                "indie rock",
+                "indie pop",
+                "indie folk",
+                "indie",
+            ],
+            "Indie",
+        ),
+        (
+            &[
+                "alternative rock",
+                "alt rock",
+                "grunge",
+                "britpop",
+                "shoegaze",
+                "emo",
+                "alternative",
+            ],
+            "Alternative Rock",
         ),
         (
             &[
                 "drum and bass",
                 "drum n bass",
                 "dubstep",
-                "synth pop",
-                "synthpop",
                 "electropop",
                 "indietronica",
                 "electronic",
+                "industrial",
                 "techno",
                 "house",
                 "trance",
@@ -374,22 +336,31 @@ fn main_family(raw: &str) -> Option<String> {
             ],
             "Electronic",
         ),
-        (&["pop punk", "ska punk", "hardcore punk", "punk"], "Punk"),
         (
-            &[
-                "metalcore",
-                "deathcore",
-                "death metal",
-                "black metal",
-                "heavy metal",
-                "thrash",
-                "doom metal",
-                "metal",
-            ],
-            "Metal",
+            &["rhythm and blues", "r&b", "rnb", "neo soul", "soul", "funk"],
+            "R&B",
         ),
         (
             &[
+                "alternative pop",
+                "power pop",
+                "dance pop",
+                "synth pop",
+                "synthpop",
+                "dream pop",
+                "teen pop",
+                "k pop",
+                "k-pop",
+                "pop rock",
+                "pop",
+            ],
+            "Pop",
+        ),
+        (
+            &[
+                "swamp rock",
+                "stoner rock",
+                "christian rock",
                 "classic rock",
                 "hard rock",
                 "album rock",
@@ -399,19 +370,19 @@ fn main_family(raw: &str) -> Option<String> {
                 "progressive rock",
                 "prog rock",
                 "folk rock",
+                "crossover rock",
                 "heartland",
                 "rock",
             ],
             "Rock",
         ),
-        (&["dance pop", "teen pop", "k pop", "k-pop", "pop"], "Pop"),
         (&["bluegrass", "americana", "outlaw country", "country"], "Country"),
         (&["singer songwriter", "folk"], "Folk"),
         (&["jazz"], "Jazz"),
         (&["blues"], "Blues"),
         (&["dancehall", "reggae", "dub"], "Reggae"),
         (&["reggaeton", "latin"], "Latin"),
-        (&["classical", "orchestra"], "Classical"),
+        (&["classical", "orchestra", "string quartet"], "Classical"),
     ];
     for (needles, family) in RULES {
         if needles.iter().any(|needle| phrase_has(&text, needle)) {
@@ -419,7 +390,8 @@ fn main_family(raw: &str) -> Option<String> {
         }
     }
     let words: Vec<&str> = text.split_whitespace().collect();
-    if (1..=2).contains(&words.len()) && words.iter().all(|word| word.len() > 2) {
+    if (1..=2).contains(&words.len()) && words.iter().all(|word| word.chars().all(|ch| ch.is_alphabetic()) && word.len() > 2)
+    {
         return Some(title_tag(&text));
     }
     None
@@ -438,77 +410,6 @@ fn family_slug(name: &str) -> String {
         }
     }
     slug.trim_matches('-').to_string()
-}
-
-fn group_similar_songs(
-    nodes: &[String],
-    neighbors: &HashMap<String, Vec<(String, f64)>>,
-) -> Vec<Vec<String>> {
-    fn walk(
-        nodes: Vec<String>,
-        neighbors: &HashMap<String, Vec<(String, f64)>>,
-        depth: u8,
-    ) -> Vec<Vec<String>> {
-        if nodes.len() < 40 {
-            return Vec::new();
-        }
-        if nodes.len() <= 120 || depth > 4 || nodes.len() < 8 {
-            return vec![nodes];
-        }
-        let mut best: Option<Vec<Vec<String>>> = None;
-        let mut best_largest = nodes.len();
-        for gamma in [1.4, 2.2, 3.2] {
-            let parts = louvain_communities(&nodes, neighbors, gamma);
-            if parts.len() < 2 {
-                continue;
-            }
-            let largest = parts.iter().map(|part| part.len()).max().unwrap_or(0);
-            if largest + 15 < best_largest && parts.iter().any(|part| part.len() >= 40) {
-                best_largest = largest;
-                best = Some(parts);
-            }
-        }
-        let Some(parts) = best else {
-            return if nodes.len() <= 160 { vec![nodes] } else { Vec::new() };
-        };
-        let mut kept = Vec::new();
-        let mut smalls = Vec::new();
-        for part in parts {
-            if part.len() >= 40 {
-                kept.extend(walk(part, neighbors, depth + 1));
-            } else {
-                smalls.push(part);
-            }
-        }
-        if kept.is_empty() {
-            return if nodes.len() <= 160 { vec![nodes] } else { Vec::new() };
-        }
-        for part in smalls {
-            let mut best_index: Option<usize> = None;
-            let mut best_weight = 0.0;
-            for song in &part {
-                let Some(links) = neighbors.get(song) else {
-                    continue;
-                };
-                for (other, weight) in links {
-                    if let Some(index) = kept.iter().position(|group| group.iter().any(|id| id == other)) {
-                        if *weight > best_weight {
-                            best_weight = *weight;
-                            best_index = Some(index);
-                        }
-                    }
-                }
-            }
-            if let Some(index) = best_index {
-                kept[index].extend(part);
-            }
-        }
-        kept
-    }
-    walk(nodes.to_vec(), neighbors, 0)
-        .into_iter()
-        .filter(|group| group.len() >= 40)
-        .collect()
 }
 
 async fn audiomuse_neighbors(
@@ -1763,67 +1664,49 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
 
     let track_ids: Vec<String> = all_tracks.iter().map(|track| track.0.clone()).collect();
     let library: HashSet<String> = track_ids.iter().cloned().collect();
-    let song_neighbors = audiomuse_neighbors(state, &cfg.navidrome_url, &auth, &track_ids, &library).await;
-    log_ha(&format!(
-        "audiomuse similar songs: {} tracks have matches",
-        song_neighbors.len()
-    ));
-
     let mut family_of: HashMap<String, String> = HashMap::new();
+    let mut untagged: Vec<String> = Vec::new();
     for track in &all_tracks {
         if let Some(family) = main_family(&track.5) {
             family_of.insert(track.0.clone(), family);
+        } else {
+            untagged.push(track.0.clone());
         }
     }
-
-    let mut genre_members: HashMap<String, Vec<String>> = HashMap::new();
-    if song_neighbors.len() * 5 >= all_tracks.len().max(1) {
-        let mut connected = HashSet::new();
-        for (id, links) in &song_neighbors {
-            connected.insert(id.clone());
-            for (other, _) in links {
-                connected.insert(other.clone());
-            }
-        }
-        let nodes: Vec<String> = connected.into_iter().collect();
-        for group in group_similar_songs(&nodes, &song_neighbors) {
+    if !untagged.is_empty() {
+        let song_neighbors =
+            audiomuse_neighbors(state, &cfg.navidrome_url, &auth, &untagged, &library).await;
+        log_ha(&format!(
+            "audiomuse checked {} songs with no usable tag, {} had matches",
+            untagged.len(),
+            song_neighbors.len()
+        ));
+        for id in &untagged {
+            let Some(links) = song_neighbors.get(id) else {
+                continue;
+            };
             let mut votes: HashMap<String, usize> = HashMap::new();
-            for id in &group {
-                if let Some(family) = family_of.get(id) {
+            for (other, _) in links {
+                if let Some(family) = family_of.get(other) {
                     *votes.entry(family.clone()).or_default() += 1;
                 }
             }
-            let name = votes
+            if let Some((family, count)) = votes
                 .into_iter()
                 .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
-                .map(|(name, _)| name)
-                .unwrap_or_else(|| "Mix".to_string());
-            genre_members.entry(name).or_default().extend(group);
+            {
+                if count >= 3 {
+                    family_of.insert(id.clone(), family);
+                }
+            }
         }
     } else {
-        log_ha("audiomuse returned too few similar songs, genre stations use the main tag");
-        for (id, family) in &family_of {
-            genre_members.entry(family.clone()).or_default().push(id.clone());
-        }
+        log_ha("every song already has a style tag, audiomuse was not used to rename any of them");
     }
 
-    let mut placed_ids: HashSet<String> = HashSet::new();
-    for ids in genre_members.values() {
-        placed_ids.extend(ids.iter().cloned());
-    }
-    let mut loose: HashMap<String, Vec<String>> = HashMap::new();
-    for track in &all_tracks {
-        if placed_ids.contains(&track.0) {
-            continue;
-        }
-        if let Some(family) = family_of.get(&track.0) {
-            loose.entry(family.clone()).or_default().push(track.0.clone());
-        }
-    }
-    for (family, ids) in loose {
-        if genre_members.contains_key(&family) || ids.len() >= 40 {
-            genre_members.entry(family).or_default().extend(ids);
-        }
+    let mut genre_members: HashMap<String, Vec<String>> = HashMap::new();
+    for (id, family) in &family_of {
+        genre_members.entry(family.clone()).or_default().push(id.clone());
     }
     genre_members.retain(|_, ids| ids.len() >= 40);
     for ids in genre_members.values_mut() {
@@ -1902,7 +1785,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         log_ha(&format!("genre station {family} songs={}", ids.len()));
     }
 
-    let mut era_buckets: HashMap<String, (String, Vec<String>, String)> = HashMap::new();
+    let mut era_buckets: HashMap<(String, String), (String, Vec<String>, String)> = HashMap::new();
     for track in &all_tracks {
         let Some(year) = track_years.get(&track.0).copied() else {
             continue;
@@ -1913,38 +1796,88 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let Some(family) = family_of.get(&track.0) else {
             continue;
         };
-        let key = format!("{decade}-{}", family_slug(family));
-        let entry = era_buckets.entry(key).or_insert_with(|| {
-            (format!("{decade} {family}"), Vec::new(), track.8.clone())
-        });
+        let entry = era_buckets
+            .entry((decade.to_string(), family.clone()))
+            .or_insert_with(|| (decade.to_string(), Vec::new(), track.8.clone()));
         entry.1.push(track.0.clone());
     }
-    let mut era_keys: Vec<String> = era_buckets.keys().cloned().collect();
-    era_keys.sort();
-    for key in era_keys {
-        let (label, ids, cover) = era_buckets.get(&key).cloned().expect("era key");
-        if ids.len() < 30 {
-            log_ha(&format!("era skipped {label} ({} songs)", ids.len()));
-            continue;
+    let mut by_family: HashMap<String, Vec<(u16, String, Vec<String>, String)>> = HashMap::new();
+    for ((decade, family), (_, ids, cover)) in era_buckets {
+        by_family.entry(family).or_default().push((
+            decade_index(&decade),
+            decade,
+            ids,
+            cover,
+        ));
+    }
+    let mut families: Vec<String> = by_family.keys().cloned().collect();
+    families.sort();
+    for family in families {
+        let mut slices = by_family.remove(&family).unwrap_or_default();
+        slices.sort_by_key(|slice| slice.0);
+        let mut packs: Vec<Vec<(u16, String, Vec<String>, String)>> = Vec::new();
+        let mut current: Vec<(u16, String, Vec<String>, String)> = Vec::new();
+        let mut count = 0usize;
+        for slice in slices {
+            if count >= 80 && !current.is_empty() {
+                packs.push(std::mem::take(&mut current));
+                count = 0;
+            }
+            count += slice.2.len();
+            current.push(slice);
         }
-        let station_id = format!("era-{key}");
-        let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
-        let _ = conn.execute(
-            "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                station_id,
-                label,
-                "Era Stations",
-                format!("{} songs", ids.len()),
-                serde_json::to_string(&ids).unwrap(),
-                "[]",
-                cover,
-                is_fav
-            ],
-        );
-        stations_built += 1;
-        log_ha(&format!("era station {label} songs={}", ids.len()));
+        if !current.is_empty() {
+            if count < 40 {
+                if let Some(last) = packs.last_mut() {
+                    last.extend(current);
+                } else {
+                    log_ha(&format!("era skipped {family} ({count} songs)"));
+                }
+            } else {
+                packs.push(current);
+            }
+        }
+        for pack in packs {
+            let songs: usize = pack.iter().map(|slice| slice.2.len()).sum();
+            if songs < 40 {
+                log_ha(&format!("era skipped {family} ({songs} songs)"));
+                continue;
+            }
+            let first = pack.first().map(|slice| slice.1.clone()).unwrap_or_default();
+            let last = pack.last().map(|slice| slice.1.clone()).unwrap_or_default();
+            let label = if first == last {
+                format!("{first} {family}")
+            } else {
+                format!("{first}–{last} {family}")
+            };
+            let mut ids = Vec::new();
+            for slice in &pack {
+                ids.extend(slice.2.iter().cloned());
+            }
+            let cover = pack
+                .iter()
+                .find(|slice| !slice.3.is_empty())
+                .map(|slice| slice.3.clone())
+                .unwrap_or_default();
+            let station_id = format!("era-{first}-{last}-{}", family_slug(&family));
+            let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
+            let _ = conn.execute(
+                "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    station_id,
+                    label,
+                    "Era Stations",
+                    format!("{} songs", ids.len()),
+                    serde_json::to_string(&ids).unwrap(),
+                    "[]",
+                    cover,
+                    is_fav
+                ],
+            );
+            stations_built += 1;
+            log_ha(&format!("era station {label} songs={}", ids.len()));
+        }
     }
 
     let mut by_artist: HashMap<String, Vec<String>> = HashMap::new();
@@ -2279,7 +2212,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.33 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.34 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2326,7 +2259,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.33 listening admin={ingress_port} public={public_port}"
+        "version 0.2.34 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.34
+
+- A song stays in the style on its file. AudioMuse is only used when that tag is missing. One similar-song group can no longer rename the whole library to Alternative.
+- Nu-metal and alternative metal go to Metal. Hip-hop stays Hip-Hop. Punk stays Punk. Indie, including "Alternative en Indie," goes to Indie instead of Alternative. Alternative rock stays Alternative Rock.
+- A style becomes a genre station only when at least 40 songs belong to it.
+- Thin decade slices of the same style are combined until the era station has enough songs. A decade that already has 80 or more stays on its own.
+
+
 ## 0.2.33
 
 - Genre stations come from AudioMuse similar songs. Songs that sound alike share a station, and the station is named with one main style, such as Rock or Hip-Hop.
