@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.39
+
+- A sound group stops growing at 80 songs. Similar-song links were chaining until one station held the library and the most common tag, Rock, named it.
+- The name is the style that sets that group apart from the rest of the library. The tag that is already on the most files does not get to name a group that has another style.
+
 ## 0.2.38
 
 - Genre, era, and artist stations are built from AudioMuse similar songs. The tag on the file does not decide the group, and Last.fm is not asked.

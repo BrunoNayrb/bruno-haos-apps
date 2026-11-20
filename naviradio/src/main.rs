@@ -306,15 +306,22 @@ fn sound_station_name(
             artists.entry(tag.clone()).or_default().insert(artist.clone());
         }
     }
-    let mut ranked: Vec<(usize, usize, String)> = songs
+    let library_top = library_tag_counts
+        .iter()
+        .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)))
+        .map(|(tag, _)| tag.clone());
+    let cluster_len = ids.len().max(1) as f64;
+    let library_len = library_size.max(1) as f64;
+    let mut ranked: Vec<(i64, usize, String)> = songs
         .into_iter()
         .filter_map(|(tag, count)| {
             let n_artists = artists.get(&tag).map(|set| set.len()).unwrap_or(0);
-            if n_artists < 2 {
-                None
-            } else {
-                Some((count, n_artists, tag))
+            if n_artists < 2 || count < 3 {
+                return None;
             }
+            let lib = library_tag_counts.get(&tag).copied().unwrap_or(1).max(1) as f64;
+            let lift = (count as f64 / cluster_len) / (lib / library_len);
+            Some(((lift * 1000.0) as i64, count, tag))
         })
         .collect();
     ranked.sort_by(|left, right| {
@@ -325,11 +332,12 @@ fn sound_station_name(
             .then(left.2.len().cmp(&right.2.len()))
             .then(left.2.cmp(&right.2))
     });
-    let broad = (library_size * 30 / 100).max(1);
-    if let Some((_, _, tag)) = ranked.iter().find(|(_, _, tag)| {
-        library_tag_counts.get(tag).copied().unwrap_or(0) < broad
-    }) {
-        return tag.clone();
+    // The tag on the most files in the library, usually Rock, does not get to name
+    // a group when that group also has a style of its own.
+    if let Some(top) = library_top {
+        if let Some((_, _, tag)) = ranked.iter().find(|(_, _, tag)| tag != &top) {
+            return tag.clone();
+        }
     }
     ranked
         .into_iter()
@@ -1705,14 +1713,25 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
     }
 
+    let mut edges: Vec<((String, String), f64)> = edge_w.into_iter().collect();
+    edges.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
     let mut parent: HashMap<String, String> = HashMap::new();
     let mut comp_size: HashMap<String, usize> = HashMap::new();
     for id in &track_ids {
         parent.insert(id.clone(), id.clone());
         comp_size.insert(id.clone(), 1);
     }
-    for ((left, right), weight) in &edge_w {
-        if *weight < 0.82 {
+    // One group stops at this size. Otherwise the closest-song links chain
+    // into a single station and the common tag, Rock, names the whole library.
+    let sound_cap = 80usize;
+    for ((left, right), weight) in &edges {
+        if *weight < 0.88 {
             continue;
         }
         let ra = uf_find(&mut parent, left);
@@ -1722,7 +1741,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         let sa = comp_size.get(&ra).copied().unwrap_or(1);
         let sb = comp_size.get(&rb).copied().unwrap_or(1);
-        if (sa >= 120 && sb >= 40) || (sb >= 120 && sa >= 40) {
+        if sa + sb > sound_cap {
             continue;
         }
         uf_unite(&mut parent, &mut comp_size, &ra, &rb);
@@ -1760,6 +1779,11 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                     if other_root == *root {
                         continue;
                     }
+                    let combined = comp_size.get(&other_root).copied().unwrap_or(1)
+                        + comp_size.get(root).copied().unwrap_or(1);
+                    if combined > sound_cap {
+                        continue;
+                    }
                     best_w = *weight;
                     best_root = other_root;
                 }
@@ -1781,7 +1805,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         for (root, _, target) in needy {
             let ra = uf_find(&mut parent, &root);
             let rb = uf_find(&mut parent, &target);
-            if ra != rb && uf_unite(&mut parent, &mut comp_size, &ra, &rb) {
+            let combined = comp_size.get(&ra).copied().unwrap_or(1)
+                + comp_size.get(&rb).copied().unwrap_or(1);
+            if ra != rb && combined <= sound_cap && uf_unite(&mut parent, &mut comp_size, &ra, &rb) {
                 merged = true;
             }
         }
@@ -2281,7 +2307,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.38 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.39 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2328,7 +2354,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.38 listening admin={ingress_port} public={public_port}"
+        "version 0.2.39 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
