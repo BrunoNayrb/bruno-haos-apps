@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.47
+
+- A genre station is every song with that genre tag, and nothing else. AudioMuse can no longer pull a song into a different genre. There is no Other station.
+
 ## 0.2.46
 
 - Other, Other 2, and the rest are gone.

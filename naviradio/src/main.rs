@@ -271,43 +271,6 @@ fn keep_strong(found: Vec<(String, f64)>, self_id: &str, library: &HashSet<Strin
     found
 }
 
-fn majority_station_name(
-    ids: &[String],
-    tag_of: &HashMap<String, String>,
-    artist_of: &HashMap<String, String>,
-) -> Option<String> {
-    let mut songs: HashMap<String, usize> = HashMap::new();
-    let mut artists: HashMap<String, HashSet<String>> = HashMap::new();
-    for id in ids {
-        let Some(tag) = tag_of.get(id) else {
-            continue;
-        };
-        *songs.entry(tag.clone()).or_default() += 1;
-        if let Some(artist) = artist_of.get(id) {
-            artists.entry(tag.clone()).or_default().insert(artist.clone());
-        }
-    }
-    let mut ranked: Vec<(usize, String)> = songs
-        .into_iter()
-        .filter_map(|(tag, count)| {
-            let n_artists = artists.get(&tag).map(|set| set.len()).unwrap_or(0);
-            if n_artists < 2 || count < 3 {
-                None
-            } else {
-                Some((count, tag))
-            }
-        })
-        .collect();
-    ranked.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-    let (count, tag) = ranked.into_iter().next()?;
-    // A few Grunge tags do not get to name a group that is mostly something else.
-    if count * 2 >= ids.len() {
-        Some(tag)
-    } else {
-        None
-    }
-}
-
 fn decade_label(year: u16) -> Option<&'static str> {
     Some(match year {
         1950..=1959 => "50s",
@@ -1667,30 +1630,6 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         similarity_pairs.len()
     ));
 
-    let mut score_of: HashMap<String, HashMap<String, f64>> = HashMap::new();
-    for (id, links) in &neighbors {
-        for (other, score) in links {
-            score_of.entry(id.clone()).or_default().insert(other.clone(), *score);
-        }
-    }
-    let pair_score = |left: &str, right: &str| -> f64 {
-        let forward = score_of
-            .get(left)
-            .and_then(|links| links.get(right))
-            .copied()
-            .unwrap_or(0.0);
-        let back = score_of
-            .get(right)
-            .and_then(|links| links.get(left))
-            .copied()
-            .unwrap_or(0.0);
-        forward.max(back)
-    };
-    // A station is the songs AudioMuse scored against the same anchor.
-    // A neighbor of a neighbor does not get in unless AudioMuse also scored it against that anchor.
-    let belongs_to_seed = |seed: &str, candidate: &str| -> bool {
-        pair_score(seed, candidate) >= 0.45
-    };
     let floor = cfg.min_station_tracks.max(1);
     let count_artists = |ids: &[String]| -> usize {
         let mut seen = HashSet::new();
@@ -1701,148 +1640,33 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         seen.len()
     };
-    let sound_cap = 80usize;
-    let mut placed: HashSet<String> = HashSet::new();
-    let mut skipped_seeds: HashSet<String> = HashSet::new();
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    loop {
-        let mut seed: Option<&String> = None;
-        for id in &track_ids {
-            if placed.contains(id) || skipped_seeds.contains(id) || !neighbors.contains_key(id) {
-                continue;
-            }
-            let links = neighbors.get(id).map(|list| list.len()).unwrap_or(0);
-            if links == 0 {
-                continue;
-            }
-            match seed {
-                None => seed = Some(id),
-                Some(current) => {
-                    let current_links = neighbors.get(current).map(|list| list.len()).unwrap_or(0);
-                    if links > current_links || (links == current_links && id < current) {
-                        seed = Some(id);
-                    }
-                }
-            }
-        }
-        let Some(seed) = seed.cloned() else {
-            break;
-        };
-        let mut group = vec![seed.clone()];
-        for candidate in &track_ids {
-            if candidate == &seed || placed.contains(candidate) {
-                continue;
-            }
-            if group.len() >= sound_cap {
-                break;
-            }
-            if belongs_to_seed(&seed, candidate) {
-                group.push(candidate.clone());
-            }
-        }
-        if count_artists(&group) >= 2 && group.len() >= 4 {
-            for id in &group {
-                placed.insert(id.clone());
-            }
-            groups.push(group);
-        } else {
-            skipped_seeds.insert(seed);
-        }
-    }
-
-    let mut merged_away: HashSet<usize> = HashSet::new();
-    for index in 0..groups.len() {
-        if merged_away.contains(&index) {
+    // A genre station is every song that carries that genre tag, and nothing else.
+    // AudioMuse is not allowed to move a song into a different genre.
+    let mut by_tag: HashMap<String, Vec<String>> = HashMap::new();
+    for id in &track_ids {
+        let Some(tag) = tag_of.get(id) else {
             continue;
-        }
-        let mut other = index + 1;
-        while other < groups.len() {
-            if merged_away.contains(&other) {
-                other += 1;
-                continue;
-            }
-            let combined = groups[index].len() + groups[other].len();
-            if combined <= sound_cap && pair_score(&groups[index][0], &groups[other][0]) >= 0.5 {
-                let extra = groups[other].clone();
-                for id in extra {
-                    if !groups[index].contains(&id) {
-                        groups[index].push(id);
-                    }
-                }
-                merged_away.insert(other);
-            }
-            other += 1;
-        }
+        };
+        by_tag.entry(tag.clone()).or_default().push(id.clone());
     }
-    let groups: Vec<Vec<String>> = groups
-        .into_iter()
-        .enumerate()
-        .filter(|(index, ids)| !merged_away.contains(index) && ids.len() >= floor && count_artists(ids) >= 2)
-        .map(|(_, ids)| ids)
-        .collect();
-
-    let mut membership: HashMap<String, usize> = HashMap::new();
-    let mut groups = groups;
-    for group in &groups {
-        for id in group {
-            *membership.entry(id.clone()).or_default() += 1;
-        }
-    }
-    for group in &mut groups {
-        let seed = group[0].clone();
-        for candidate in &track_ids {
-            if group.len() >= sound_cap {
-                break;
-            }
-            if group.iter().any(|id| id == candidate) {
-                continue;
-            }
-            if membership.get(candidate).copied().unwrap_or(0) >= 2 {
-                continue;
-            }
-            if !belongs_to_seed(&seed, candidate) {
-                continue;
-            }
-            group.push(candidate.clone());
-            *membership.entry(candidate.clone()).or_default() += 1;
-        }
-    }
-
-    let mut pending = groups;
-    pending.sort_by(|left, right| right.len().cmp(&left.len()).then(left[0].cmp(&right[0])));
+    let mut pending: Vec<(String, Vec<String>)> = by_tag.into_iter().collect();
+    pending.sort_by(|left, right| right.1.len().cmp(&left.1.len()).then(left.0.cmp(&right.0)));
 
     let mut family_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut sound_stations: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut used_station_ids: HashSet<String> = HashSet::new();
     let mut placed_ids: HashSet<String> = HashSet::new();
-    let mut used_names: HashSet<String> = HashSet::new();
-    for mut ids in pending {
+    for (name, mut ids) in pending {
         ids.sort();
         ids.dedup();
-        let Some(name) = majority_station_name(&ids, &tag_of, &artist_of) else {
+        if ids.len() < floor || count_artists(&ids) < 2 {
             log_ha(&format!(
-                "sound group has no majority style ({} songs)",
-                ids.len()
+                "genre skipped {name} ({} songs, {} artists)",
+                ids.len(),
+                count_artists(&ids)
             ));
             continue;
-        };
-        if used_names.contains(&name) {
-            if let Some(existing) = sound_stations.iter_mut().find(|station| station.1 == name) {
-                for id in &ids {
-                    if existing.2.len() >= sound_cap {
-                        break;
-                    }
-                    if existing.2.iter().any(|have| have == id) {
-                        continue;
-                    }
-                    existing.2.push(id.clone());
-                    family_of.entry(id.clone()).or_default().push(name.clone());
-                    placed_ids.insert(id.clone());
-                }
-            }
-            continue;
         }
-        used_names.insert(name.clone());
         let slug = {
             let raw = family_slug(&name);
             if raw.is_empty() { "mix".to_string() } else { raw }
@@ -1858,47 +1682,13 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             family_of.entry(id.clone()).or_default().push(name.clone());
             placed_ids.insert(id.clone());
         }
+        log_ha(&format!("genre station {name} songs={}", ids.len()));
         sound_stations.push((station_id, name, ids));
     }
-    let mut attached = 0usize;
-    for id in &track_ids {
-        if placed_ids.contains(id) {
-            continue;
-        }
-        let mut best: Option<(i64, usize)> = None;
-        for (index, (_, _, members)) in sound_stations.iter().enumerate() {
-            if members.len() >= sound_cap {
-                continue;
-            }
-            let mut top = 0.0_f64;
-            for member in members {
-                let score = pair_score(id, member);
-                if score > top {
-                    top = score;
-                }
-            }
-            if top < 0.42 {
-                continue;
-            }
-            let rank = (top * 1000.0) as i64;
-            if best.as_ref().map(|(score, _)| rank > *score).unwrap_or(true) {
-                best = Some((rank, index));
-            }
-        }
-        let Some((_, index)) = best else {
-            continue;
-        };
-        let name = sound_stations[index].1.clone();
-        sound_stations[index].2.push(id.clone());
-        family_of.entry(id.clone()).or_default().push(name);
-        placed_ids.insert(id.clone());
-        attached += 1;
-    }
     log_ha(&format!(
-        "sound stations={} songs_placed={} attached_to_existing={}",
+        "genre stations={} songs_placed={}",
         sound_stations.len(),
-        placed_ids.len(),
-        attached
+        placed_ids.len()
     ));
 
     let mut genre_of_track: HashMap<String, String> = HashMap::new();
@@ -2309,7 +2099,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.46 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.47 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2356,7 +2146,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.46 listening admin={ingress_port} public={public_port}"
+        "version 0.2.47 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
