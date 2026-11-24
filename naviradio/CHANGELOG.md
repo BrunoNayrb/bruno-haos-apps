@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.42
+
+- 0.2.41 was too strict, so almost every song fell into one pile. A station is the songs AudioMuse scored against the same anchor song, and it stops at 80.
+- A neighbor of a neighbor does not get in unless AudioMuse also scored that song against the anchor.
+- Other is capped at 80 songs. It cannot hold the whole library.
+
 ## 0.2.41
 
 - A song no longer joins a station because it is similar to one song that is similar to the rest. It has to match the songs already in the group.

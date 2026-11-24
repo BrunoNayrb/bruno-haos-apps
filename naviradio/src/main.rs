@@ -255,14 +255,19 @@ fn sonic_matches(json: &serde_json::Value) -> Vec<(String, f64)> {
 fn keep_strong(found: Vec<(String, f64)>, self_id: &str, library: &HashSet<String>) -> Vec<(String, f64)> {
     let mut found: Vec<(String, f64)> = found
         .into_iter()
-        .filter(|(other, score)| other != self_id && library.contains(other) && *score >= 0.55)
+        .filter(|(other, score)| other != self_id && library.contains(other) && *score >= 0.4)
         .collect();
     if found.is_empty() {
         return found;
     }
-    let best = found.iter().map(|(_, score)| *score).fold(0.0_f64, f64::max);
-    found.retain(|(_, score)| *score >= best * 0.85);
-    found.truncate(5);
+    let best = found
+        .iter()
+        .map(|(_, score)| *score)
+        .filter(|score| *score < 0.98)
+        .fold(0.0_f64, f64::max);
+    let best = if best > 0.0 { best } else { 1.0 };
+    found.retain(|(_, score)| *score >= best * 0.7);
+    found.truncate(8);
     found
 }
 
@@ -397,7 +402,7 @@ async fn audiomuse_neighbors(
             jobs.push(tokio::spawn(async move {
                 let mut params = nd_params(&auth);
                 params.push(("id".into(), id.clone()));
-                params.push(("count".into(), "8".into()));
+                params.push(("count".into(), "12".into()));
                 let scored = match subsonic_get(&state, &base, "getSonicSimilarTracks.view", params.clone()).await {
                     Ok(json) => sonic_matches(&json),
                     Err(_) => Vec::new(),
@@ -1712,35 +1717,11 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             .unwrap_or(0.0);
         forward.max(back)
     };
-    // A song joins a group only when it is close to the songs already in it.
-    // One shared neighbor is not enough, so a chain cannot pull unlike artists together.
-    let cohesion = |group: &[String], candidate: &str| -> Option<f64> {
-        let mut direct = 0usize;
-        let mut sum = 0.0;
-        for member in group {
-            let score = pair_score(member, candidate);
-            if score >= 0.55 {
-                direct += 1;
-                sum += score;
-            }
-        }
-        if direct == 0 {
-            return None;
-        }
-        if group.len() == 1 {
-            return Some(sum);
-        }
-        let need = (group.len() / 2).max(2);
-        if direct < need {
-            return None;
-        }
-        let average = sum / group.len() as f64;
-        if average < 0.35 {
-            return None;
-        }
-        Some(average)
+    // A station is the songs AudioMuse scored against the same anchor.
+    // A neighbor of a neighbor does not get in unless AudioMuse also scored it against that anchor.
+    let belongs_to_seed = |seed: &str, candidate: &str| -> bool {
+        pair_score(seed, candidate) >= 0.45
     };
-
     let floor = cfg.min_station_tracks.max(1);
     let count_artists = |ids: &[String]| -> usize {
         let mut seen = HashSet::new();
@@ -1779,26 +1760,18 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             break;
         };
         let mut group = vec![seed.clone()];
-        while group.len() < sound_cap {
-            let mut best: Option<(i64, String)> = None;
-            for candidate in &track_ids {
-                if placed.contains(candidate) || group.iter().any(|id| id == candidate) {
-                    continue;
-                }
-                let Some(average) = cohesion(&group, candidate) else {
-                    continue;
-                };
-                let rank = (average * 1000.0) as i64;
-                if best.as_ref().map(|(score, _)| rank > *score).unwrap_or(true) {
-                    best = Some((rank, candidate.clone()));
-                }
+        for candidate in &track_ids {
+            if candidate == &seed || placed.contains(candidate) {
+                continue;
             }
-            let Some((_, next)) = best else {
+            if group.len() >= sound_cap {
                 break;
-            };
-            group.push(next);
+            }
+            if belongs_to_seed(&seed, candidate) {
+                group.push(candidate.clone());
+            }
         }
-        if group.len() >= floor && count_artists(&group) >= 2 {
+        if count_artists(&group) >= 2 && group.len() >= 4 {
             for id in &group {
                 placed.insert(id.clone());
             }
@@ -1808,40 +1781,61 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
     }
 
+    let mut merged_away: HashSet<usize> = HashSet::new();
+    for index in 0..groups.len() {
+        if merged_away.contains(&index) {
+            continue;
+        }
+        let mut other = index + 1;
+        while other < groups.len() {
+            if merged_away.contains(&other) {
+                other += 1;
+                continue;
+            }
+            let combined = groups[index].len() + groups[other].len();
+            if combined <= sound_cap && pair_score(&groups[index][0], &groups[other][0]) >= 0.5 {
+                let extra = groups[other].clone();
+                for id in extra {
+                    if !groups[index].contains(&id) {
+                        groups[index].push(id);
+                    }
+                }
+                merged_away.insert(other);
+            }
+            other += 1;
+        }
+    }
+    let groups: Vec<Vec<String>> = groups
+        .into_iter()
+        .enumerate()
+        .filter(|(index, ids)| !merged_away.contains(index) && ids.len() >= floor && count_artists(ids) >= 2)
+        .map(|(_, ids)| ids)
+        .collect();
+
     let mut membership: HashMap<String, usize> = HashMap::new();
+    let mut groups = groups;
     for group in &groups {
         for id in group {
             *membership.entry(id.clone()).or_default() += 1;
         }
     }
     for group in &mut groups {
-        let snapshot = group.clone();
-        let mut extras: Vec<(i64, String)> = Vec::new();
+        let seed = group[0].clone();
         for candidate in &track_ids {
-            if snapshot.iter().any(|id| id == candidate) {
+            if group.len() >= sound_cap {
+                break;
+            }
+            if group.iter().any(|id| id == candidate) {
                 continue;
             }
             if membership.get(candidate).copied().unwrap_or(0) >= 2 {
                 continue;
             }
-            let Some(average) = cohesion(&snapshot, candidate) else {
-                continue;
-            };
-            extras.push(((average * 1000.0) as i64, candidate.clone()));
-        }
-        extras.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-        for (_, candidate) in extras {
-            if group.len() >= sound_cap {
-                break;
-            }
-            if membership.get(&candidate).copied().unwrap_or(0) >= 2 {
-                continue;
-            }
-            if group.iter().any(|id| id == &candidate) {
+            if !belongs_to_seed(&seed, candidate) {
                 continue;
             }
             group.push(candidate.clone());
-            *membership.entry(candidate).or_default() += 1;
+            *membership.entry(candidate.clone()).or_default() += 1;
         }
     }
 
@@ -1967,31 +1961,59 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         .collect();
     other.sort();
     other.dedup();
-    if !other.is_empty() {
-        let station_id = "genre-other";
+    for (chunk_no, chunk) in other.chunks(sound_cap).enumerate() {
+        let ids = chunk.to_vec();
+        let label = sound_station_names(
+            &ids,
+            &tag_of,
+            &artist_of,
+            &library_tag_counts,
+            library.len(),
+        )
+        .into_iter()
+        .find(|name| !used_names.contains(name))
+        .unwrap_or_else(|| {
+            if chunk_no == 0 {
+                "Other".to_string()
+            } else {
+                format!("Other {}", chunk_no + 1)
+            }
+        });
+        used_names.insert(label.clone());
+        let slug = {
+            let raw = family_slug(&label);
+            if raw.is_empty() { format!("other-{}", chunk_no + 1) } else { raw }
+        };
+        let mut station_id = format!("genre-{slug}");
+        let mut n = 2usize;
+        while used_station_ids.contains(&station_id) {
+            station_id = format!("genre-{slug}-{n}");
+            n += 1;
+        }
+        used_station_ids.insert(station_id.clone());
         let cover = all_tracks
             .iter()
-            .find(|track| other.iter().any(|id| id == &track.0) && !track.8.is_empty())
+            .find(|track| ids.iter().any(|id| id == &track.0) && !track.8.is_empty())
             .map(|track| track.8.clone())
             .unwrap_or_default();
-        let is_fav = if existing_favorites.contains(station_id) { 1 } else { 0 };
+        let is_fav = if existing_favorites.contains(&station_id) { 1 } else { 0 };
         let _ = conn.execute(
             "INSERT INTO stations (id, name, category, description, core_tracks_json, fringe_tracks_json, cover_id, is_favorite)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 station_id,
-                "Other",
+                label,
                 "Genre Stations",
-                format!("{} songs", other.len()),
-                serde_json::to_string(&other).unwrap(),
+                format!("{} songs", ids.len()),
+                serde_json::to_string(&ids).unwrap(),
                 "[]",
                 cover,
                 is_fav
             ],
         );
-        placed += other.len();
+        placed += ids.len();
         stations_built += 1;
-        log_ha(&format!("genre station Other songs={}", other.len()));
+        log_ha(&format!("genre station {label} songs={}", ids.len()));
     }
 
     let mut era_buckets: HashMap<(String, String), (String, Vec<String>, String)> = HashMap::new();
@@ -2334,7 +2356,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.41 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.42 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2381,7 +2403,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.41 listening admin={ingress_port} public={public_port}"
+        "version 0.2.42 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
