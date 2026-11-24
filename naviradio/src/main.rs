@@ -1865,6 +1865,15 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             continue;
         };
         used_names.insert(name.clone());
+        ids.retain(|id| tag_of.get(id).map(|tag| tag == &name).unwrap_or(false));
+        if ids.len() < floor || count_artists(&ids) < 2 {
+            log_ha(&format!(
+                "sound group {name} dropped ({} songs actually tagged {name})",
+                ids.len()
+            ));
+            used_names.remove(&name);
+            continue;
+        }
         let slug = {
             let raw = family_slug(&name);
             if raw.is_empty() { "mix".to_string() } else { raw }
@@ -1890,6 +1899,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let mut best: Option<(i64, usize)> = None;
         for (index, (_, _, members)) in sound_stations.iter().enumerate() {
             if members.len() >= sound_cap {
+                continue;
+            }
+            if !tag_of.get(id).map(|tag| tag == &sound_stations[index].1).unwrap_or(false) {
                 continue;
             }
             let mut top = 0.0_f64;
@@ -2393,7 +2405,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.43 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.44 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2440,7 +2452,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.43 listening admin={ingress_port} public={public_port}"
+        "version 0.2.44 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

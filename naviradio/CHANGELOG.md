@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.44
+
+- A station only keeps songs that are actually tagged with its name. Grunge no longer includes songs that merely sounded close to one grunge track.
+- A leftover song can only be added to a station when its tag matches that station.
+
 ## 0.2.43
 
 - A leftover song is added to an existing station when AudioMuse scored it against a song already in that station. Stations still stop at 80. Songs with no match stay in Other.
