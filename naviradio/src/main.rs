@@ -231,61 +231,39 @@ fn usable_label_tag(raw: &str) -> Option<String> {
     Some(title_tag(&text))
 }
 
-fn uf_find(parent: &mut HashMap<String, String>, id: &str) -> String {
-    let mut root = id.to_string();
-    let mut guard = 0;
-    while let Some(next) = parent.get(&root) {
-        if next == &root || guard > 10_000 {
-            break;
+fn sonic_matches(json: &serde_json::Value) -> Vec<(String, f64)> {
+    let Some(items) = json["subsonic-response"]["sonicMatch"].as_array() else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for item in items {
+        let id = json_str(&item["entry"]["id"]);
+        if id.is_empty() {
+            continue;
         }
-        root = next.clone();
-        guard += 1;
-    }
-    let mut cur = id.to_string();
-    while cur != root {
-        let next = parent.get(&cur).cloned().unwrap_or_else(|| root.clone());
-        parent.insert(cur.clone(), root.clone());
-        if next == cur {
-            break;
+        let mut score = item["similarity"].as_f64().unwrap_or(0.0);
+        if score > 1.0 {
+            score /= 100.0;
         }
-        cur = next;
+        if score > 0.0 {
+            found.push((id, score));
+        }
     }
-    root
+    found
 }
 
-fn uf_unite(
-    parent: &mut HashMap<String, String>,
-    size: &mut HashMap<String, usize>,
-    a: &str,
-    b: &str,
-) -> bool {
-    let ra = uf_find(parent, a);
-    let rb = uf_find(parent, b);
-    if ra == rb {
-        return false;
+fn keep_strong(found: Vec<(String, f64)>, self_id: &str, library: &HashSet<String>) -> Vec<(String, f64)> {
+    let mut found: Vec<(String, f64)> = found
+        .into_iter()
+        .filter(|(other, score)| other != self_id && library.contains(other) && *score >= 0.55)
+        .collect();
+    if found.is_empty() {
+        return found;
     }
-    let sa = size.get(&ra).copied().unwrap_or(1);
-    let sb = size.get(&rb).copied().unwrap_or(1);
-    if sa < sb {
-        parent.insert(ra.clone(), rb.clone());
-        size.insert(rb, sa + sb);
-    } else {
-        parent.insert(rb, ra.clone());
-        size.insert(ra, sa + sb);
-    }
-    true
-}
-
-fn collect_groups(
-    parent: &mut HashMap<String, String>,
-    ids: &[String],
-) -> HashMap<String, Vec<String>> {
-    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
-    for id in ids {
-        let root = uf_find(parent, id);
-        groups.entry(root).or_default().push(id.clone());
-    }
-    groups
+    let best = found.iter().map(|(_, score)| *score).fold(0.0_f64, f64::max);
+    found.retain(|(_, score)| *score >= best * 0.85);
+    found.truncate(5);
+    found
 }
 
 fn sound_station_names(
@@ -407,6 +385,7 @@ async fn audiomuse_neighbors(
     let mut neighbors: HashMap<String, Vec<(String, f64)>> = HashMap::new();
     let total = ids.len();
     let mut done = 0usize;
+    let mut used_scores = false;
     for chunk in ids.chunks(6) {
         let mut jobs = Vec::new();
         for id in chunk {
@@ -414,49 +393,60 @@ async fn audiomuse_neighbors(
             let base = base.to_string();
             let auth = auth.clone();
             let id = id.clone();
+            let library = library.clone();
             jobs.push(tokio::spawn(async move {
                 let mut params = nd_params(&auth);
                 params.push(("id".into(), id.clone()));
-                params.push(("count".into(), "12".into()));
-                let found = match subsonic_get(&state, &base, "getSimilarSongs2.view", params).await {
+                params.push(("count".into(), "8".into()));
+                let scored = match subsonic_get(&state, &base, "getSonicSimilarTracks.view", params.clone()).await {
+                    Ok(json) => sonic_matches(&json),
+                    Err(_) => Vec::new(),
+                };
+                if !scored.is_empty() {
+                    let kept = keep_strong(scored, &id, &library);
+                    return (id, kept, true);
+                }
+                let ranked = match subsonic_get(&state, &base, "getSimilarSongs2.view", params).await {
                     Ok(json) => json_items(&json["subsonic-response"]["similarSongs2"]["song"])
                         .iter()
-                        .map(|song| json_str(&song["id"]))
-                        .filter(|song_id| !song_id.is_empty())
+                        .enumerate()
+                        .map(|(rank, song)| {
+                            let song_id = json_str(&song["id"]);
+                            let score = (1.0 - rank as f64 * 0.06).max(0.4);
+                            (song_id, score)
+                        })
+                        .filter(|(song_id, _)| !song_id.is_empty())
                         .collect::<Vec<_>>(),
                     Err(err) => {
                         log_ha(&format!("audiomuse similar failed for {id}: {err}"));
                         Vec::new()
                     }
                 };
-                (id, found)
+                let kept = keep_strong(ranked, &id, &library);
+                (id, kept, false)
             }));
         }
         for job in jobs {
-            let Ok((id, found)) = job.await else {
+            let Ok((id, found, scored)) = job.await else {
                 continue;
             };
             done += 1;
-            for (rank, other) in found.into_iter().enumerate() {
-                if other == id || !library.contains(&other) {
-                    continue;
-                }
-                let weight = (1.0 - rank as f64 * 0.06).max(0.4);
-                let list = neighbors.entry(id.clone()).or_default();
-                if !list.iter().any(|(name, _)| name == &other) {
-                    list.push((other.clone(), weight));
-                }
-                let back = neighbors.entry(other.clone()).or_default();
-                if !back.iter().any(|(name, _)| name == &id) {
-                    back.push((id.clone(), weight));
-                }
+            if scored {
+                used_scores = true;
+            }
+            if !found.is_empty() {
+                neighbors.insert(id, found);
             }
         }
         if done == total || done % 60 == 0 {
             log_ha(&format!("audiomuse similar {done}/{total}"));
         }
     }
-    neighbors.retain(|_, links| !links.is_empty());
+    if used_scores {
+        log_ha("audiomuse similarity scores came from getSonicSimilarTracks");
+    } else {
+        log_ha("getSonicSimilarTracks was not available, used the closest ranked similar songs");
+    }
     neighbors
 }
 
@@ -1703,57 +1693,53 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         similarity_pairs.len()
     ));
 
-    let mut edge_w: HashMap<(String, String), f64> = HashMap::new();
+    let mut score_of: HashMap<String, HashMap<String, f64>> = HashMap::new();
     for (id, links) in &neighbors {
-        for (other, weight) in links {
-            if other == id || !library.contains(other) {
-                continue;
+        for (other, score) in links {
+            score_of.entry(id.clone()).or_default().insert(other.clone(), *score);
+        }
+    }
+    let pair_score = |left: &str, right: &str| -> f64 {
+        let forward = score_of
+            .get(left)
+            .and_then(|links| links.get(right))
+            .copied()
+            .unwrap_or(0.0);
+        let back = score_of
+            .get(right)
+            .and_then(|links| links.get(left))
+            .copied()
+            .unwrap_or(0.0);
+        forward.max(back)
+    };
+    // A song joins a group only when it is close to the songs already in it.
+    // One shared neighbor is not enough, so a chain cannot pull unlike artists together.
+    let cohesion = |group: &[String], candidate: &str| -> Option<f64> {
+        let mut direct = 0usize;
+        let mut sum = 0.0;
+        for member in group {
+            let score = pair_score(member, candidate);
+            if score >= 0.55 {
+                direct += 1;
+                sum += score;
             }
-            let key = if id < other {
-                (id.clone(), other.clone())
-            } else {
-                (other.clone(), id.clone())
-            };
-            let slot = edge_w.entry(key).or_insert(0.0);
-            if *weight > *slot {
-                *slot = *weight;
-            }
         }
-    }
-
-    let mut edges: Vec<((String, String), f64)> = edge_w.into_iter().collect();
-    edges.sort_by(|left, right| {
-        right
-            .1
-            .partial_cmp(&left.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut parent: HashMap<String, String> = HashMap::new();
-    let mut comp_size: HashMap<String, usize> = HashMap::new();
-    for id in &track_ids {
-        parent.insert(id.clone(), id.clone());
-        comp_size.insert(id.clone(), 1);
-    }
-    // One group stops at this size. Otherwise the closest-song links chain
-    // into a single station and the common tag, Rock, names the whole library.
-    let sound_cap = 80usize;
-    for ((left, right), weight) in &edges {
-        if *weight < 0.88 {
-            continue;
+        if direct == 0 {
+            return None;
         }
-        let ra = uf_find(&mut parent, left);
-        let rb = uf_find(&mut parent, right);
-        if ra == rb {
-            continue;
+        if group.len() == 1 {
+            return Some(sum);
         }
-        let sa = comp_size.get(&ra).copied().unwrap_or(1);
-        let sb = comp_size.get(&rb).copied().unwrap_or(1);
-        if sa + sb > sound_cap {
-            continue;
+        let need = (group.len() / 2).max(2);
+        if direct < need {
+            return None;
         }
-        uf_unite(&mut parent, &mut comp_size, &ra, &rb);
-    }
+        let average = sum / group.len() as f64;
+        if average < 0.35 {
+            return None;
+        }
+        Some(average)
+    };
 
     let floor = cfg.min_station_tracks.max(1);
     let count_artists = |ids: &[String]| -> usize {
@@ -1765,75 +1751,104 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         seen.len()
     };
-
+    let sound_cap = 80usize;
+    let mut placed: HashSet<String> = HashSet::new();
+    let mut skipped_seeds: HashSet<String> = HashSet::new();
+    let mut groups: Vec<Vec<String>> = Vec::new();
     loop {
-        let groups = collect_groups(&mut parent, &track_ids);
-        let mut needy: Vec<(String, f64, String)> = Vec::new();
-        for (root, ids) in &groups {
-            if ids.len() >= floor && count_artists(ids) >= 2 {
+        let mut seed: Option<&String> = None;
+        for id in &track_ids {
+            if placed.contains(id) || skipped_seeds.contains(id) || !neighbors.contains_key(id) {
                 continue;
             }
-            let mut best_root = String::new();
-            let mut best_w = 0.0;
-            for id in ids {
-                let Some(links) = neighbors.get(id) else {
-                    continue;
-                };
-                for (other, weight) in links {
-                    if *weight <= best_w {
-                        continue;
+            let links = neighbors.get(id).map(|list| list.len()).unwrap_or(0);
+            if links == 0 {
+                continue;
+            }
+            match seed {
+                None => seed = Some(id),
+                Some(current) => {
+                    let current_links = neighbors.get(current).map(|list| list.len()).unwrap_or(0);
+                    if links > current_links || (links == current_links && id < current) {
+                        seed = Some(id);
                     }
-                    let other_root = uf_find(&mut parent, other);
-                    if other_root == *root {
-                        continue;
-                    }
-                    let combined = comp_size.get(&other_root).copied().unwrap_or(1)
-                        + comp_size.get(root).copied().unwrap_or(1);
-                    if combined > sound_cap {
-                        continue;
-                    }
-                    best_w = *weight;
-                    best_root = other_root;
                 }
             }
-            if best_w > 0.0 {
-                needy.push((root.clone(), best_w, best_root));
-            }
         }
-        if needy.is_empty() {
+        let Some(seed) = seed.cloned() else {
             break;
-        }
-        needy.sort_by(|left, right| {
-            right
-                .1
-                .partial_cmp(&left.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let mut merged = false;
-        for (root, _, target) in needy {
-            let ra = uf_find(&mut parent, &root);
-            let rb = uf_find(&mut parent, &target);
-            let combined = comp_size.get(&ra).copied().unwrap_or(1)
-                + comp_size.get(&rb).copied().unwrap_or(1);
-            if ra != rb && combined <= sound_cap && uf_unite(&mut parent, &mut comp_size, &ra, &rb) {
-                merged = true;
+        };
+        let mut group = vec![seed.clone()];
+        while group.len() < sound_cap {
+            let mut best: Option<(i64, String)> = None;
+            for candidate in &track_ids {
+                if placed.contains(candidate) || group.iter().any(|id| id == candidate) {
+                    continue;
+                }
+                let Some(average) = cohesion(&group, candidate) else {
+                    continue;
+                };
+                let rank = (average * 1000.0) as i64;
+                if best.as_ref().map(|(score, _)| rank > *score).unwrap_or(true) {
+                    best = Some((rank, candidate.clone()));
+                }
             }
+            let Some((_, next)) = best else {
+                break;
+            };
+            group.push(next);
         }
-        if !merged {
-            break;
+        if group.len() >= floor && count_artists(&group) >= 2 {
+            for id in &group {
+                placed.insert(id.clone());
+            }
+            groups.push(group);
+        } else {
+            skipped_seeds.insert(seed);
         }
     }
 
-    let groups = collect_groups(&mut parent, &track_ids);
-    let mut pending: Vec<Vec<String>> = Vec::new();
-    for ids in groups.into_values() {
-        if ids.len() >= floor && count_artists(&ids) >= 2 {
-            pending.push(ids);
+    let mut membership: HashMap<String, usize> = HashMap::new();
+    for group in &groups {
+        for id in group {
+            *membership.entry(id.clone()).or_default() += 1;
         }
     }
+    for group in &mut groups {
+        let snapshot = group.clone();
+        let mut extras: Vec<(i64, String)> = Vec::new();
+        for candidate in &track_ids {
+            if snapshot.iter().any(|id| id == candidate) {
+                continue;
+            }
+            if membership.get(candidate).copied().unwrap_or(0) >= 2 {
+                continue;
+            }
+            let Some(average) = cohesion(&snapshot, candidate) else {
+                continue;
+            };
+            extras.push(((average * 1000.0) as i64, candidate.clone()));
+        }
+        extras.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+        for (_, candidate) in extras {
+            if group.len() >= sound_cap {
+                break;
+            }
+            if membership.get(&candidate).copied().unwrap_or(0) >= 2 {
+                continue;
+            }
+            if group.iter().any(|id| id == &candidate) {
+                continue;
+            }
+            group.push(candidate.clone());
+            *membership.entry(candidate).or_default() += 1;
+        }
+    }
+
+    let mut pending = groups;
     pending.sort_by(|left, right| right.len().cmp(&left.len()).then(left[0].cmp(&right[0])));
 
-    let mut family_of: HashMap<String, String> = HashMap::new();
+    let mut family_of: HashMap<String, Vec<String>> = HashMap::new();
     let mut sound_stations: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut used_station_ids: HashSet<String> = HashSet::new();
     let mut placed_ids: HashSet<String> = HashSet::new();
@@ -1868,7 +1883,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         used_station_ids.insert(station_id.clone());
         for id in &ids {
-            family_of.insert(id.clone(), name.clone());
+            family_of.entry(id.clone()).or_default().push(name.clone());
             placed_ids.insert(id.clone());
         }
         sound_stations.push((station_id, name, ids));
@@ -1987,13 +2002,17 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let Some(decade) = decade_label(year) else {
             continue;
         };
-        let Some(family) = family_of.get(&track.0) else {
+        let Some(families) = family_of.get(&track.0) else {
             continue;
         };
-        let entry = era_buckets
-            .entry((decade.to_string(), family.clone()))
-            .or_insert_with(|| (decade.to_string(), Vec::new(), track.8.clone()));
-        entry.1.push(track.0.clone());
+        for family in families {
+            let entry = era_buckets
+                .entry((decade.to_string(), family.clone()))
+                .or_insert_with(|| (decade.to_string(), Vec::new(), track.8.clone()));
+            if !entry.1.iter().any(|id| id == &track.0) {
+                entry.1.push(track.0.clone());
+            }
+        }
     }
     let mut by_family: HashMap<String, Vec<(u16, String, Vec<String>, String)>> = HashMap::new();
     for ((decade, family), (_, ids, cover)) in era_buckets {
@@ -2315,7 +2334,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.40 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.41 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2362,7 +2381,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.40 listening admin={ingress_port} public={public_port}"
+        "version 0.2.41 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

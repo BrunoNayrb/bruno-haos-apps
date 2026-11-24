@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.41
+
+- A song no longer joins a station because it is similar to one song that is similar to the rest. It has to match the songs already in the group.
+- Similarity comes from AudioMuse scores when Navidrome provides them. A weak link is ignored.
+- A song can be in two stations when it really matches both. Tags are still only the name, not the reason a song was included.
+
 ## 0.2.40
 
 - Two sound groups can no longer both be named Rock. The second group uses another style if it has one. If Rock is its only name, those songs go to Other instead of a second Rock station.
