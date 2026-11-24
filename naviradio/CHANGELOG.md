@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.46
+
+- Other, Other 2, and the rest are gone.
+- A station is named for the tag on at least half its songs. A few Grunge tags no longer rename a whole group. The group stays together, capped at 80.
+
 ## 0.2.45
 
 - Songs that did not make a style station stay in Other. A leftover batch is no longer named Grunge, or any other style, because a few files in that batch carry that tag.
