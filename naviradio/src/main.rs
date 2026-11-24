@@ -2010,22 +2010,13 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     other.dedup();
     for (chunk_no, chunk) in other.chunks(sound_cap).enumerate() {
         let ids = chunk.to_vec();
-        let label = sound_station_names(
-            &ids,
-            &tag_of,
-            &artist_of,
-            &library_tag_counts,
-            library.len(),
-        )
-        .into_iter()
-        .find(|name| !used_names.contains(name))
-        .unwrap_or_else(|| {
-            if chunk_no == 0 {
-                "Other".to_string()
-            } else {
-                format!("Other {}", chunk_no + 1)
-            }
-        });
+        // These songs did not make a style station. Do not name the pile after a
+        // tag that happens to appear a few times in the batch.
+        let label = if chunk_no == 0 {
+            "Other".to_string()
+        } else {
+            format!("Other {}", chunk_no + 1)
+        };
         used_names.insert(label.clone());
         let slug = {
             let raw = family_slug(&label);
@@ -2405,7 +2396,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.44 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.45 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2452,7 +2443,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.44 listening admin={ingress_port} public={public_port}"
+        "version 0.2.45 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

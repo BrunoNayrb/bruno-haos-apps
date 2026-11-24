@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.45
+
+- Songs that did not make a style station stay in Other. A leftover batch is no longer named Grunge, or any other style, because a few files in that batch carry that tag.
+
 ## 0.2.44
 
 - A station only keeps songs that are actually tagged with its name. Grunge no longer includes songs that merely sounded close to one grunge track.
