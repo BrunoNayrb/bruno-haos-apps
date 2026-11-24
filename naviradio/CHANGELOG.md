@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.43
+
+- A leftover song is added to an existing station when AudioMuse scored it against a song already in that station. Stations still stop at 80. Songs with no match stay in Other.
+- An era station needs 8 songs in that decade. It was using the genre minimum, and songs sitting in Other were not counted, so most decades disappeared.
+
 ## 0.2.42
 
 - 0.2.41 was too strict, so almost every song fell into one pile. A station is the songs AudioMuse scored against the same anchor song, and it stops at 80.

@@ -1882,10 +1882,45 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         sound_stations.push((station_id, name, ids));
     }
+    let mut attached = 0usize;
+    for id in &track_ids {
+        if placed_ids.contains(id) {
+            continue;
+        }
+        let mut best: Option<(i64, usize)> = None;
+        for (index, (_, _, members)) in sound_stations.iter().enumerate() {
+            if members.len() >= sound_cap {
+                continue;
+            }
+            let mut top = 0.0_f64;
+            for member in members {
+                let score = pair_score(id, member);
+                if score > top {
+                    top = score;
+                }
+            }
+            if top < 0.42 {
+                continue;
+            }
+            let rank = (top * 1000.0) as i64;
+            if best.as_ref().map(|(score, _)| rank > *score).unwrap_or(true) {
+                best = Some((rank, index));
+            }
+        }
+        let Some((_, index)) = best else {
+            continue;
+        };
+        let name = sound_stations[index].1.clone();
+        sound_stations[index].2.push(id.clone());
+        family_of.entry(id.clone()).or_default().push(name);
+        placed_ids.insert(id.clone());
+        attached += 1;
+    }
     log_ha(&format!(
-        "sound stations={} songs_placed={}",
+        "sound stations={} songs_placed={} attached_to_existing={}",
         sound_stations.len(),
-        placed_ids.len()
+        placed_ids.len(),
+        attached
     ));
 
     let mut genre_of_track: HashMap<String, String> = HashMap::new();
@@ -2051,8 +2086,10 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         let mut slices = by_family.remove(&family).unwrap_or_default();
         slices.sort_by_key(|slice| slice.0);
         for (_year, decade, ids, cover) in slices {
-            // One decade, one station. Do not glue 80s through 2020s into a range.
-            if ids.len() < cfg.min_station_tracks {
+            // A decade needs fewer songs than a whole genre station.
+            // The genre minimum was dropping most decades, which is why the era list was short.
+            let era_floor = 8usize.min(cfg.min_station_tracks.max(1));
+            if ids.len() < era_floor {
                 log_ha(&format!(
                     "era skipped {decade} {family} ({} songs)",
                     ids.len()
@@ -2356,7 +2393,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.42 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.43 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2403,7 +2440,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.42 listening admin={ingress_port} public={public_port}"
+        "version 0.2.43 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
