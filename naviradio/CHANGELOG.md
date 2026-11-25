@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.49
+
+- A genre station no longer labels every song "Genre: Pop". The line under the artist shows the file's other genres, such as Hard Rock, and is hidden when the file has no other genre.
+
 ## 0.2.48
 
 - Genre stations read every Navidrome genre on the file. A broad tag is dropped only when that file also has a listed child, such as Rock when Hard Rock is present. A song can be in more than one specific station.

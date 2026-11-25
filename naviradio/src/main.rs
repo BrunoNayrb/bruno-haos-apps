@@ -1793,7 +1793,17 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         for id in &ids {
             family_of.entry(id.clone()).or_default().push(name.clone());
             placed_ids.insert(id.clone());
-            reasons.push((station_id.clone(), id.clone(), format!("Genre: {name}")));
+            let others = tags_of.get(id).map(|tags| {
+                tags.iter()
+                    .filter(|tag| tag.as_str() != name)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            });
+            if let Some(others) = others {
+                if !others.is_empty() {
+                    reasons.push((station_id.clone(), id.clone(), others.join(", ")));
+                }
+            }
         }
         log_ha(&format!("genre station {name} songs={}", ids.len()));
         sound_stations.push((station_id, name, ids));
@@ -2280,7 +2290,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.48 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.49 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2327,7 +2337,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.48 listening admin={ingress_port} public={public_port}"
+        "version 0.2.49 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {
