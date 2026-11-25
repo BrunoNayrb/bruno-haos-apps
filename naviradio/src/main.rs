@@ -1569,6 +1569,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let mut all_tracks = Vec::new();
     let mut track_years: HashMap<String, u16> = HashMap::new();
     let mut track_genre_tags: HashMap<String, Vec<String>> = HashMap::new();
+    let mut track_file_tags: HashMap<String, Vec<String>> = HashMap::new();
     let folders_to_scan = if cfg.selected_folders.is_empty() {
         vec![None]
     } else {
@@ -1633,7 +1634,14 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                     let artist_id = json_str(&s["artistId"]);
                     let album_name = s["album"].as_str().unwrap_or("Unknown").to_string();
                     let raw_genres = song_genre_raw(s);
-                    let cleaned: Vec<String> = raw_genres.iter().filter_map(|value| canonical_genre(value)).collect();
+                    let mut cleaned = Vec::new();
+                    for value in &raw_genres {
+                        if let Some(tag) = canonical_genre(value) {
+                            if !cleaned.contains(&tag) {
+                                cleaned.push(tag);
+                            }
+                        }
+                    }
                     let tags = effective_genre_tags(&cleaned);
                     let genre = if tags.is_empty() {
                         s["genre"].as_str().unwrap_or("").trim().to_string()
@@ -1651,6 +1659,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                     let style_key = clean_tag(&genre).unwrap_or_default();
                     if !id.is_empty() {
                         track_genre_tags.insert(id.clone(), tags);
+                        track_file_tags.insert(id.clone(), cleaned);
                         let song_year = s["year"].as_u64().unwrap_or(0) as u16;
                         let year = if (1950..2030).contains(&song_year) {
                             song_year
@@ -1793,15 +1802,9 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         for id in &ids {
             family_of.entry(id.clone()).or_default().push(name.clone());
             placed_ids.insert(id.clone());
-            let others = tags_of.get(id).map(|tags| {
-                tags.iter()
-                    .filter(|tag| tag.as_str() != name)
-                    .cloned()
-                    .collect::<Vec<_>>()
-            });
-            if let Some(others) = others {
-                if !others.is_empty() {
-                    reasons.push((station_id.clone(), id.clone(), others.join(", ")));
+            if let Some(tags) = track_file_tags.get(id) {
+                if !tags.is_empty() {
+                    reasons.push((station_id.clone(), id.clone(), tags.join(", ")));
                 }
             }
         }
@@ -2290,7 +2293,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.49 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.50 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2337,7 +2340,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.49 listening admin={ingress_port} public={public_port}"
+        "version 0.2.50 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.50
+
+- Every song in a genre station lists all of the genre tags on the file. A song that is also in another station shows those tags too, including a broad tag that was dropped.
+
 ## 0.2.49
 
 - A genre station no longer labels every song "Genre: Pop". The line under the artist shows the file's other genres, such as Hard Rock, and is hidden when the file has no other genre.
