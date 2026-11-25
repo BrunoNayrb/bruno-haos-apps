@@ -205,6 +205,7 @@
     .track-row.current { background: #243044; }
     .track-row.current .t-title { color: #60a5fa; }
     .t-title, .t-artist, .t-album { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .t-why { display: block; margin-top: 2px; font-size: 11px; color: #8b93a7; }
     .t-num, .t-time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
     .empty-main { color: var(--muted); margin-top: 48px; }
     .player-bar {
@@ -703,6 +704,7 @@
     let isAdmin = false;
     let stations = [];
     let stationTracks = [];
+    let stationReasons = {};
     let activeStationId = null;
     let queue = [];
     let history = [];
@@ -1007,6 +1009,12 @@
       }
       const res = await fetch('api/stations/' + encodeURIComponent(st.id) + '/tracks', { headers: apiHeaders() });
       stationTracks = res.ok ? await res.json() : [];
+      stationReasons = {};
+      const reasonRes = await fetch('api/stations/' + encodeURIComponent(st.id) + '/reasons', { headers: apiHeaders() });
+      if (reasonRes.ok) {
+        const rows = await reasonRes.json();
+        rows.forEach(row => { stationReasons[row.id] = row.reason; });
+      }
       renderDetail();
     }
 
@@ -1086,6 +1094,13 @@
         const artist = document.createElement('div');
         artist.className = 't-artist';
         artist.textContent = track.artist;
+        const why = stationReasons[track.id];
+        if (why) {
+          const note = document.createElement('div');
+          note.className = 't-why';
+          note.textContent = why;
+          artist.appendChild(note);
+        }
         const album = document.createElement('div');
         album.className = 't-album';
         album.textContent = track.album;

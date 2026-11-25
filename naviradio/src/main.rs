@@ -231,6 +231,83 @@ fn usable_label_tag(raw: &str) -> Option<String> {
     Some(title_tag(&text))
 }
 
+fn canonical_genre(raw: &str) -> Option<String> {
+    let cleaned = clean_tag(raw)?;
+    let normalized = match cleaned.as_str() {
+        "hiphop" => "hip hop",
+        "numetal" => "nu metal",
+        "alt rock" => "alternative rock",
+        "alt metal" => "alternative metal",
+        "synthpop" => "synth pop",
+        other => other,
+    };
+    usable_label_tag(normalized)
+}
+
+fn genre_children(parent: &str) -> &'static [&'static str] {
+    match parent {
+        "rock" => &[
+            "hard rock",
+            "glam rock",
+            "grunge",
+            "britpop",
+            "shoegaze",
+            "alternative rock",
+            "indie rock",
+        ],
+        "metal" => &["nu metal", "death metal", "black metal", "power metal"],
+        "punk" => &["pop punk", "skate punk", "hardcore punk"],
+        "pop" => &["indie pop", "synth pop", "electropop", "dream pop"],
+        "electronic" => &["house", "techno", "trance"],
+        "alternative" => &["alternative rock", "indie rock", "indie pop"],
+        "indie" => &["indie rock", "indie pop", "indie folk"],
+        _ => &[],
+    }
+}
+
+fn is_parent_of(parent: &str, child: &str) -> bool {
+    genre_children(parent).contains(&child)
+}
+
+/// Drop a broad tag only when this file also has a listed child of that tag.
+fn effective_genre_tags(tags: &[String]) -> Vec<String> {
+    let mut kept = Vec::new();
+    for tag in tags {
+        let lower = normalize_genre_text(tag);
+        let suppressed = tags.iter().any(|other| {
+            let other_lower = normalize_genre_text(other);
+            other_lower != lower && is_parent_of(&lower, &other_lower)
+        });
+        if !suppressed && !kept.contains(tag) {
+            kept.push(tag.clone());
+        }
+    }
+    kept
+}
+
+fn song_genre_raw(song: &serde_json::Value) -> Vec<String> {
+    let mut raw = Vec::new();
+    if let Some(items) = song["genres"].as_array() {
+        for item in items {
+            let name = item["name"]
+                .as_str()
+                .or_else(|| item.as_str())
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                raw.push(name.to_string());
+            }
+        }
+    }
+    if raw.is_empty() {
+        let one = song["genre"].as_str().unwrap_or("").trim();
+        if !one.is_empty() {
+            raw.push(one.to_string());
+        }
+    }
+    raw
+}
+
 fn sonic_matches(json: &serde_json::Value) -> Vec<(String, f64)> {
     let Some(items) = json["subsonic-response"]["sonicMatch"].as_array() else {
         return Vec::new();
@@ -255,7 +332,7 @@ fn sonic_matches(json: &serde_json::Value) -> Vec<(String, f64)> {
 fn keep_strong(found: Vec<(String, f64)>, self_id: &str, library: &HashSet<String>) -> Vec<(String, f64)> {
     let mut found: Vec<(String, f64)> = found
         .into_iter()
-        .filter(|(other, score)| other != self_id && library.contains(other) && *score >= 0.4)
+        .filter(|(other, score)| other != self_id && library.contains(other) && *score >= 0.55)
         .collect();
     if found.is_empty() {
         return found;
@@ -337,32 +414,16 @@ async fn audiomuse_neighbors(
                 let mut params = nd_params(&auth);
                 params.push(("id".into(), id.clone()));
                 params.push(("count".into(), "12".into()));
-                let scored = match subsonic_get(&state, &base, "getSonicSimilarTracks.view", params.clone()).await {
+                let scored = match subsonic_get(&state, &base, "getSonicSimilarTracks.view", params).await {
                     Ok(json) => sonic_matches(&json),
-                    Err(_) => Vec::new(),
-                };
-                if !scored.is_empty() {
-                    let kept = keep_strong(scored, &id, &library);
-                    return (id, kept, true);
-                }
-                let ranked = match subsonic_get(&state, &base, "getSimilarSongs2.view", params).await {
-                    Ok(json) => json_items(&json["subsonic-response"]["similarSongs2"]["song"])
-                        .iter()
-                        .enumerate()
-                        .map(|(rank, song)| {
-                            let song_id = json_str(&song["id"]);
-                            let score = (1.0 - rank as f64 * 0.06).max(0.4);
-                            (song_id, score)
-                        })
-                        .filter(|(song_id, _)| !song_id.is_empty())
-                        .collect::<Vec<_>>(),
                     Err(err) => {
-                        log_ha(&format!("audiomuse similar failed for {id}: {err}"));
+                        log_ha(&format!("sonic similarity unavailable for {id}: {err}"));
                         Vec::new()
                     }
                 };
-                let kept = keep_strong(ranked, &id, &library);
-                (id, kept, false)
+                let kept = keep_strong(scored, &id, &library);
+                let found = !kept.is_empty();
+                (id, kept, found)
             }));
         }
         for job in jobs {
@@ -384,7 +445,7 @@ async fn audiomuse_neighbors(
     if used_scores {
         log_ha("audiomuse similarity scores came from getSonicSimilarTracks");
     } else {
-        log_ha("getSonicSimilarTracks was not available, used the closest ranked similar songs");
+        log_ha("getSonicSimilarTracks returned no usable scores");
     }
     neighbors
 }
@@ -432,6 +493,12 @@ fn init_db(path: &str) -> Connection {
             fringe_tracks_json TEXT NOT NULL,
             cover_id TEXT NOT NULL,
             is_favorite INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS station_reasons (
+            station_id TEXT NOT NULL,
+            track_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            PRIMARY KEY (station_id, track_id)
         );
         ",
     )
@@ -918,6 +985,37 @@ async fn api_station_tracks(
             .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
     });
     Ok(Json(tracks))
+}
+
+async fn api_station_reasons(
+    State(state): State<AppState>,
+    Path(station_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+    if !is_authenticated(&state, &headers) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT r.track_id, t.title, t.artist, r.reason
+             FROM station_reasons r
+             LEFT JOIN tracks t ON t.id = r.track_id
+             WHERE r.station_id = ?1
+             ORDER BY t.artist, t.title",
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = stmt
+        .query_map(params![station_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "title": row.get::<_, String>(1).unwrap_or_default(),
+                "artist": row.get::<_, String>(2).unwrap_or_default(),
+                "reason": row.get::<_, String>(3)?,
+            }))
+        })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(rows.filter_map(Result::ok).collect()))
 }
 
 async fn api_station_queue(
@@ -1470,6 +1568,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
 
     let mut all_tracks = Vec::new();
     let mut track_years: HashMap<String, u16> = HashMap::new();
+    let mut track_genre_tags: HashMap<String, Vec<String>> = HashMap::new();
     let folders_to_scan = if cfg.selected_folders.is_empty() {
         vec![None]
     } else {
@@ -1533,7 +1632,14 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                     let artist = s["artist"].as_str().unwrap_or("Unknown").to_string();
                     let artist_id = json_str(&s["artistId"]);
                     let album_name = s["album"].as_str().unwrap_or("Unknown").to_string();
-                    let genre = s["genre"].as_str().unwrap_or("").trim().to_string();
+                    let raw_genres = song_genre_raw(s);
+                    let cleaned: Vec<String> = raw_genres.iter().filter_map(|value| canonical_genre(value)).collect();
+                    let tags = effective_genre_tags(&cleaned);
+                    let genre = if tags.is_empty() {
+                        s["genre"].as_str().unwrap_or("").trim().to_string()
+                    } else {
+                        tags.join(", ")
+                    };
                     let duration = s["duration"]
                         .as_u64()
                         .or_else(|| s["duration"].as_f64().map(|n| n as u64))
@@ -1544,6 +1650,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                     };
                     let style_key = clean_tag(&genre).unwrap_or_default();
                     if !id.is_empty() {
+                        track_genre_tags.insert(id.clone(), tags);
                         let song_year = s["year"].as_u64().unwrap_or(0) as u16;
                         let year = if (1950..2030).contains(&song_year) {
                             song_year
@@ -1587,11 +1694,13 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     track_ids.dedup();
     let library: HashSet<String> = track_ids.iter().cloned().collect();
     let mut artist_of: HashMap<String, String> = HashMap::new();
-    let mut tag_of: HashMap<String, String> = HashMap::new();
+    let mut tags_of: HashMap<String, Vec<String>> = HashMap::new();
     for track in &all_tracks {
         artist_of.entry(track.0.clone()).or_insert_with(|| track.2.to_lowercase());
-        if let Some(tag) = usable_label_tag(&track.5) {
-            tag_of.entry(track.0.clone()).or_insert(tag);
+        if let Some(tags) = track_genre_tags.get(&track.0) {
+            if !tags.is_empty() {
+                tags_of.insert(track.0.clone(), tags.clone());
+            }
         }
     }
 
@@ -1640,14 +1749,16 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
         seen.len()
     };
-    // A genre station is every song that carries that genre tag, and nothing else.
-    // AudioMuse is not allowed to move a song into a different genre.
+    // A genre station contains only songs whose own tags name that station.
+    // A broad tag is removed only when a listed child tag is on the same file.
     let mut by_tag: HashMap<String, Vec<String>> = HashMap::new();
     for id in &track_ids {
-        let Some(tag) = tag_of.get(id) else {
+        let Some(tags) = tags_of.get(id) else {
             continue;
         };
-        by_tag.entry(tag.clone()).or_default().push(id.clone());
+        for tag in tags {
+            by_tag.entry(tag.clone()).or_default().push(id.clone());
+        }
     }
     let mut pending: Vec<(String, Vec<String>)> = by_tag.into_iter().collect();
     pending.sort_by(|left, right| right.1.len().cmp(&left.1.len()).then(left.0.cmp(&right.0)));
@@ -1656,6 +1767,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let mut sound_stations: Vec<(String, String, Vec<String>)> = Vec::new();
     let mut used_station_ids: HashSet<String> = HashSet::new();
     let mut placed_ids: HashSet<String> = HashSet::new();
+    let mut reasons: Vec<(String, String, String)> = Vec::new();
     for (name, mut ids) in pending {
         ids.sort();
         ids.dedup();
@@ -1681,6 +1793,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         for id in &ids {
             family_of.entry(id.clone()).or_default().push(name.clone());
             placed_ids.insert(id.clone());
+            reasons.push((station_id.clone(), id.clone(), format!("Genre: {name}")));
         }
         log_ha(&format!("genre station {name} songs={}", ids.len()));
         sound_stations.push((station_id, name, ids));
@@ -1694,7 +1807,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     let mut genre_of_track: HashMap<String, String> = HashMap::new();
     for (station_id, _, ids) in &sound_stations {
         for id in ids {
-            genre_of_track.insert(id.clone(), station_id.clone());
+            genre_of_track.entry(id.clone()).or_insert_with(|| station_id.clone());
         }
     }
     for track in &mut all_tracks {
@@ -1702,6 +1815,19 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
     }
 
     let conn = state.db.lock().unwrap();
+    struct ScanTx<'a> {
+        conn: &'a Connection,
+        open: bool,
+    }
+    impl Drop for ScanTx<'_> {
+        fn drop(&mut self) {
+            if self.open {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+        }
+    }
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut scan_tx = ScanTx { conn: &conn, open: true };
     conn.execute("DELETE FROM tracks", []).unwrap();
     conn.execute("DELETE FROM similar_artists", []).unwrap();
     let mut existing_favorites: HashSet<String> = HashSet::new();
@@ -1713,6 +1839,7 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         }
     }
     conn.execute("DELETE FROM stations", []).unwrap();
+    conn.execute("DELETE FROM station_reasons", []).unwrap();
 
     for (a, b) in &similarity_pairs {
         let _ = conn.execute(
@@ -1833,10 +1960,10 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
         artist_display.entry(key.clone()).or_insert_with(|| track.2.clone());
         artist_cover.entry(key).or_insert_with(|| track.8.clone());
     }
-    let artist_floor = cfg.min_station_tracks.max(20);
+    let artist_floor = cfg.min_station_tracks.max(8);
     let mut seeds: Vec<String> = by_artist
         .iter()
-        .filter(|(_, ids)| ids.len() >= 8)
+        .filter(|(_, ids)| ids.len() >= artist_floor)
         .map(|(name, _)| name.clone())
         .collect();
     seeds.sort_by(|a, b| {
@@ -1846,69 +1973,110 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
             .unwrap_or(0)
             .cmp(&by_artist.get(a).map(|ids| ids.len()).unwrap_or(0))
     });
-    let mut covered: HashSet<String> = HashSet::new();
+    let mut admitted_artists = 0usize;
+    let mut rejected_artists = 0usize;
     for artist_key in seeds {
         let Some(own) = by_artist.get(&artist_key).cloned() else {
             continue;
         };
-        let mut mix = own.clone();
-        let mut heard_weight: HashMap<String, f64> = HashMap::new();
+        let artist_name = artist_display
+            .get(&artist_key)
+            .cloned()
+            .unwrap_or_else(|| artist_key.clone());
+        let mut evidence: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        let mut matched_tracks: HashMap<String, HashMap<String, f64>> = HashMap::new();
         for song_id in &own {
             let Some(links) = neighbors.get(song_id) else {
                 continue;
             };
-            for (other, weight) in links {
+            for (other, score) in links {
+                if *score < 0.55 {
+                    continue;
+                }
                 let Some(other_artist) = artist_of.get(other) else {
                     continue;
                 };
                 if other_artist == &artist_key {
                     continue;
                 }
-                *heard_weight.entry(other_artist.clone()).or_default() += *weight;
-                mix.push(other.clone());
+                evidence
+                    .entry(other_artist.clone())
+                    .or_default()
+                    .entry(song_id.clone())
+                    .and_modify(|have| *have = have.max(*score))
+                    .or_insert(*score);
+                matched_tracks
+                    .entry(other_artist.clone())
+                    .or_default()
+                    .entry(other.clone())
+                    .and_modify(|have| *have = have.max(*score))
+                    .or_insert(*score);
             }
         }
-        mix.sort();
-        mix.dedup();
-        let artist_name = artist_display
-            .get(&artist_key)
-            .map(|name| name.as_str())
-            .unwrap_or(artist_key.as_str());
-        if mix.len() < artist_floor {
-            log_ha(&format!(
-                "artist station skipped {artist_name} ({} songs)",
-                mix.len()
-            ));
-            continue;
+        let mut fringe: Vec<String> = Vec::new();
+        let mut heard: Vec<(i64, String, f64, usize)> = Vec::new();
+        for (other_artist, sources) in &evidence {
+            if sources.len() < 3 {
+                rejected_artists += 1;
+                continue;
+            }
+            let average = sources.values().sum::<f64>() / sources.len() as f64;
+            if average < 0.55 {
+                rejected_artists += 1;
+                continue;
+            }
+            let Some(tracks) = matched_tracks.get(other_artist) else {
+                continue;
+            };
+            let mut added = false;
+            for (track_id, score) in tracks {
+                if *score < 0.55 {
+                    continue;
+                }
+                fringe.push(track_id.clone());
+                added = true;
+            }
+            if added {
+                admitted_artists += 1;
+                heard.push((
+                    (average * 1000.0) as i64,
+                    other_artist.clone(),
+                    average,
+                    sources.len(),
+                ));
+            }
         }
-        let already = mix.iter().filter(|id| covered.contains(*id)).count();
-        if already * 2 >= mix.len() {
-            log_ha(&format!(
-                "artist station skipped {artist_name} because that sound is already covered"
-            ));
-            continue;
-        }
-        for id in &mix {
-            covered.insert(id.clone());
-        }
-        let mut heard: Vec<(u32, String)> = heard_weight
-            .into_iter()
-            .map(|(key, weight)| ((weight * 100.0) as u32, key))
-            .collect();
+        fringe.sort();
+        fringe.dedup();
         heard.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
         let shown = heard
             .iter()
             .take(4)
-            .filter_map(|(_, key)| artist_display.get(key))
+            .filter_map(|(_, key, _, _)| artist_display.get(key))
             .cloned()
             .collect::<Vec<_>>()
             .join(", ");
         let description = if shown.is_empty() {
-            format!("{} songs", mix.len())
+            format!("{} songs", own.len())
         } else {
-            format!("{} songs, also {shown}", mix.len())
+            format!("{} songs, also {shown}", own.len())
         };
         let st_id = format!("artist-{}", artist_key.replace([' ', '.', '&', '/'], "-"));
+        for id in &own {
+            reasons.push((st_id.clone(), id.clone(), format!("Artist: {artist_name}")));
+        }
+        for (_, other_artist, average, sources) in &heard {
+            let Some(tracks) = matched_tracks.get(other_artist) else {
+                continue;
+            };
+            for (track_id, _) in tracks {
+                reasons.push((
+                    st_id.clone(),
+                    track_id.clone(),
+                    format!("Similarity: {average:.2} across {sources} {artist_name} songs"),
+                ));
+            }
+        }
         let is_fav = if existing_favorites.contains(&st_id) { 1 } else { 0 };
         let cover = artist_cover.get(&artist_key).cloned().unwrap_or_default();
         let _ = conn.execute(
@@ -1919,18 +2087,30 @@ async fn perform_scan_and_build(state: &AppState, req: &ScanRequest) -> Result<(
                 format!("{artist_name} Radio"),
                 "Artist Stations",
                 description,
-                serde_json::to_string(&mix).unwrap(),
-                "[]",
+                serde_json::to_string(&own).unwrap(),
+                serde_json::to_string(&fringe).unwrap(),
                 cover,
                 is_fav
             ],
         );
         stations_built += 1;
         log_ha(&format!(
-            "artist station {artist_name} songs={}",
-            mix.len()
+            "artist station {artist_name} songs={} fringe={}",
+            own.len(),
+            fringe.len()
         ));
     }
+    log_ha(&format!(
+        "artist fringe admitted={admitted_artists} rejected={rejected_artists}"
+    ));
+    for (station_id, track_id, reason) in &reasons {
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO station_reasons (station_id, track_id, reason) VALUES (?1, ?2, ?3)",
+            params![station_id, track_id, reason],
+        );
+    }
+    scan_tx.open = false;
+    conn.execute_batch("COMMIT").unwrap();
 
     log_ha(&format!(
         "stations={} genre_songs={} indexed={}",
@@ -2065,6 +2245,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/stations", get(api_stations))
         .route("/api/stations/:id/favorite", post(api_toggle_favorite))
         .route("/api/stations/:id/tracks", get(api_station_tracks))
+        .route("/api/stations/:id/reasons", get(api_station_reasons))
         .route("/api/stations/:id/queue", get(api_station_queue))
         .route("/api/stream/:id", get(proxy_stream))
         .route("/api/cover/:id", get(proxy_cover));
@@ -2099,7 +2280,7 @@ async fn main() {
     let logins = Arc::new(Mutex::new(HashMap::new()));
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent("NaviRadio/0.2.47 (https://github.com/BrunoNayrb/brunos-haos-apps)")
+        .user_agent("NaviRadio/0.2.48 (https://github.com/BrunoNayrb/brunos-haos-apps)")
         .build()
         .unwrap();
 
@@ -2146,7 +2327,7 @@ async fn main() {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await.unwrap();
     let public_listener = tokio::net::TcpListener::bind(public_addr).await.unwrap();
     log_ha(&format!(
-        "version 0.2.47 listening admin={ingress_port} public={public_port}"
+        "version 0.2.48 listening admin={ingress_port} public={public_port}"
     ));
 
     tokio::select! {

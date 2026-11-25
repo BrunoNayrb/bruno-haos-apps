@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.48
+
+- Genre stations read every Navidrome genre on the file. A broad tag is dropped only when that file also has a listed child, such as Rock when Hard Rock is present. A song can be in more than one specific station.
+- Artist stations keep that artist's songs as the core. Another artist is fringe only when at least three different songs by the seed artist score 0.55 or better. Rank is no longer treated as a similarity score.
+- Each track stores why it is in the station. That explanation is replaced only when the new stations are saved.
+
 ## 0.2.47
 
 - A genre station is every song with that genre tag, and nothing else. AudioMuse can no longer pull a song into a different genre. There is no Other station.
